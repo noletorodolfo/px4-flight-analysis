@@ -217,6 +217,42 @@ gyroscopic term sits under the residual.* What is identifiable with confidence i
 control effectiveness (to ±50 %, or ±10 % with the right structure), the coherent
 bandwidth, and the actuation delay (30–60 ms depending on method).
 
+## 2026-11-24 — Plant effectiveness: a number that should not have been printed
+
+Reviewing the comparison figure raised a fair question: the frequency-domain plant
+effectiveness in roll read 510 on one flight and 384 on the other — a 25 % change on
+the **same aircraft**, printed with no interval, and listed among the metrics that are
+supposed to be robust to how the flight was flown.
+
+Checked, in order:
+
+- **Configuration.** The allocation parameters (`CA_ROTOR*_PX/PY/CT/KM`), `THR_MDL_FAC`
+  and the battery scaling parameters are byte-identical between the two logs, so the
+  mapping from normalised torque to physical torque did not change. Ruled out.
+- **Operating point.** Mean motor command differs by 4 %, nowhere near enough.
+- **The estimate itself.** This was it. The coherent set on the first flight is
+  **17 frequency bins**; on the second, 41. Refitting both over a common band leaves the
+  first flight with fewer than five usable points, and swapping in the better plant
+  structure (integrator plus delay) makes its estimate jump from 6 to 780 — the sign of
+  a fit with nothing to hold on to.
+
+So the aircraft never changed; the estimate on the quieter flight was unsupported and
+my code printed it anyway. The first flight was flown half as hard (roll-rate command
+std 11 vs 24 °/s), which excites the plant less, drops coherence, and makes K
+unreliable — **K does not depend on how hard you fly, but its reliability does.**
+
+Fixed in `src/compare_flights.py`:
+
+- a quality gate: K is only reported with at least 25 coherent bins spanning at least a
+  4:1 frequency ratio, and reads "not estimable" otherwise;
+- an interval, by resampling the coherent bins. Pitch now reads 153 [151–161] against
+  166 [159–176] — overlapping, so the +8 % that looked like a finding is not one;
+- the number of coherent bins is reported as its own row, so a missing K comes with the
+  reason next to it.
+
+`band_p` (coherent bandwidth) moved out of the robust list: it is a property of the
+measurement, not of the aircraft.
+
 ## 2026-11-23 — Threshold calibration against the public fleet
 
 `src/calibrate_thresholds.py` downloads a sample of public logs (one per

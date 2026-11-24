@@ -44,11 +44,15 @@ INK, MUTED, GRID, BG = "#1a1a1a", "#6b6b6b", "#e3e3e0", "#fcfcfb"
 HZ = 50.0
 BLOCK_S = 10.0
 NBOOT = 400
+# A plant gain is only reported with this many coherent bins spanning this
+# much frequency; below that the estimate is noise with a number attached.
+K_MIN_POINTS = 25
+K_MIN_SPAN = 4.0          # ratio between the highest and lowest coherent bin
 
 # Metrics whose value depends on how hard the aircraft was flown.
 CONDITION_SENSITIVE = {"err_roll", "err_pitch", "err_p", "err_q", "sat"}
 # Metrics that do not scale with aggressiveness: cleaner evidence.
-ROBUST = {"err_p_norm", "err_q_norm", "lag_p", "lag_q", "K_p", "K_q", "band_p"}
+ROBUST = {"err_p_norm", "err_q_norm", "lag_p", "lag_q", "K_p", "K_q"}
 
 TUNING_PREFIXES = ("MC_", "MPC_", "ATT_", "IMU_", "CA_", "THR_", "MOT_", "PWM_",
                    "RATE_", "EKF2_", "SENS_")
@@ -72,9 +76,10 @@ METRICS = {
     "K_p": ("plant effectiveness, roll (frequency)", "rad/s² per tau", None),
     "K_q": ("plant effectiveness, pitch (frequency)", "rad/s² per tau", None),
     "band_p": ("bandwidth with coherence >= 0.6, roll", "Hz", None),
+    "band_pts_p": ("coherent frequency bins, roll", "count", None),
 }
 
-NO_CI = {"vib_hf", "K_p", "K_q", "band_p"}
+NO_CI = {"vib_hf", "K_p", "K_q", "band_p", "band_pts_p"}
 
 
 def auto_window(u, t):
@@ -156,7 +161,16 @@ def load_flight(path):
     except Exception:
         pass
 
-    # frequency response: separates a plant property from a loop setting
+    # Frequency response: separates a plant property from a loop setting.
+    #
+    # Quality gate. A plant gain estimated on a handful of scattered coherent
+    # bins is not a measurement. On one flight of the HKUST pair the coherent
+    # set was 17 points spread from 0.12 to 9.9 Hz, and the resulting K differed
+    # by 25 % from the other flight of the SAME aircraft — the aircraft had not
+    # changed, the estimate was simply unsupported. A gently flown flight excites
+    # the plant less, coherence drops, and K becomes unreliable even though K
+    # itself does not depend on how hard you fly. So K is only reported with
+    # enough coherent bins over a wide enough span, and always with an interval.
     freq = {}
     try:
         tq = px4io.to_df(u, "vehicle_torque_setpoint")[["xyz[0]", "xyz[1]"]]
@@ -169,6 +183,7 @@ def load_flight(path):
         if len(d2) > 8 * HZ * 2:
             from scipy.signal import coherence as _coh, csd as _csd, welch as _welch
             nper = int(8 * HZ)
+            rng_k = np.random.default_rng(7)
             for axis, (cu, cy) in {"p": ("tau_x", "pp"), "q": ("tau_y", "qq")}.items():
                 x = d2[cu].to_numpy(); y = d2[cy].to_numpy()
                 f_, Pxx = _welch(x, fs=HZ, nperseg=nper)
@@ -176,16 +191,40 @@ def load_flight(path):
                 _, coh = _coh(x, y, fs=HZ, nperseg=nper)
                 H = Pxy / np.where(Pxx == 0, np.nan, Pxx)
                 b = (f_ > 0.05) & (f_ < 10) & (coh >= 0.6)
-                if b.sum() >= 5:
+                npts = int(b.sum())
+                span = (f_[b].max() / max(f_[b].min(), 1e-9)) if npts else 0.0
+                if axis == "p":
+                    freq["band_p"] = (float(f_[b].max() - f_[b].min()) if npts
+                                      else np.nan)
+                    freq["band_pts_p"] = float(npts)
+                if npts < K_MIN_POINTS or span < K_MIN_SPAN:
+                    continue           # not estimable: say nothing rather than guess
+
+                def fit_K(sel):
                     best = None
                     for td in np.arange(0.0, 0.201, 0.01):
                         a_, K_, r_, _ = fq.fit_first_order(
-                            f_[b], H[b] * np.exp(1j * 2 * np.pi * f_[b] * td), coh[b])
+                            f_[sel], H[sel] * np.exp(1j * 2 * np.pi * f_[sel] * td),
+                            coh[sel])
                         if best is None or r_ > best[2]:
                             best = (a_, K_, r_, td)
-                    freq[f"K_{axis}"] = abs(best[1])
-                    if axis == "p":
-                        freq["band_p"] = float(f_[b].max() - f_[b].min())
+                    return abs(best[1])
+
+                idx_b = np.where(b)[0]
+                freq[f"K_{axis}"] = fit_K(idx_b)
+                # interval by resampling the coherent frequency bins
+                boot = []
+                for _ in range(60):
+                    pick = np.unique(rng_k.integers(0, len(idx_b), len(idx_b)))
+                    if len(pick) < K_MIN_POINTS // 2:
+                        continue
+                    try:
+                        boot.append(fit_K(idx_b[pick]))
+                    except Exception:
+                        pass
+                if len(boot) >= 10:
+                    freq[f"K_{axis}_lo"] = float(np.percentile(boot, 5))
+                    freq[f"K_{axis}_hi"] = float(np.percentile(boot, 95))
     except Exception:
         pass
     return u, df, mot, vib, freq
@@ -238,7 +277,7 @@ def block_metrics(df, mot, vib, idx, freq=None):
         out[f"lag_{axis}"] = _lag_over_runs(df, idx, axis, HZ)
     out["exc_p"] = float(np.std(d["sp_p"].to_numpy()) * R2D)
     out["vib_hf"] = vib
-    for k in ("K_p", "K_q", "band_p"):
+    for k in ("K_p", "K_q", "band_p", "band_pts_p"):
         out[k] = (freq or {}).get(k, np.nan)
     if mot:
         U = d[[f"m{i}" for i in range(len(mot))]].to_numpy()
@@ -315,6 +354,7 @@ def main(argv):
             return 1
 
     rng = np.random.default_rng(42)
+    freqs_by_flight = freqs
     bases, boots = [], []
     for df, mot, vib, fq_ in zip(dfs, mots, vibs, freqs):
         b, s = bootstrap(df, mot, vib, fq_, rng=rng)
@@ -373,7 +413,16 @@ def main(argv):
         for b, s in zip(bases, boots):
             v = b.get(k, np.nan)
             if no_ci:
-                cells.append(f"{v:.3g}")
+                lo = b.get(f"{k}_lo"); hi = b.get(f"{k}_hi")
+                if lo is None:
+                    lo = (freqs_by_flight[bases.index(b)] or {}).get(f"{k}_lo")
+                    hi = (freqs_by_flight[bases.index(b)] or {}).get(f"{k}_hi")
+                if not np.isfinite(v):
+                    cells.append("not estimable")
+                elif lo is not None:
+                    cells.append(f"{v:.3g} [{lo:.3g}–{hi:.3g}]")
+                else:
+                    cells.append(f"{v:.3g}")
                 continue
             lo, hi = (np.nanpercentile(s[k], 5), np.nanpercentile(s[k], 95)) \
                 if k in s and np.isfinite(s[k]).any() else (np.nan, np.nan)
@@ -401,8 +450,11 @@ def main(argv):
             else:
                 row += " – | – |"
         elif len(names) == 2:
-            d = bases[1].get(k, np.nan) - bases[0].get(k, np.nan)
-            row += f" {d:+.3g} (no CI) | — |"
+            v0, v1 = bases[0].get(k, np.nan), bases[1].get(k, np.nan)
+            if not (np.isfinite(v0) and np.isfinite(v1)):
+                row += " not estimable in both flights | — |"
+            else:
+                row += f" {v1 - v0:+.3g} (no CI) | — |"
         L.append(row)
     L.append("")
 
@@ -454,7 +506,7 @@ def main(argv):
     # ------------------------------------------------------------ figure
     keys = [k for k in ("err_roll", "err_pitch", "err_p", "err_q",
                         "err_p_norm", "err_q_norm", "lag_p", "lag_q",
-                        "K_p", "K_q", "band_p",
+                        "K_p", "K_q", "band_p", "band_pts_p",
                         "vib_hf", "sat", "mean_motor", "exc_p")
             if any(np.isfinite(b.get(k, np.nan)) for b in bases)]
     ncol = 4

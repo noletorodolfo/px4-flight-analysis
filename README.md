@@ -84,6 +84,14 @@ did not change.
 This is why the report separates **robust** metrics from **condition-sensitive** ones
 and warns when aggressiveness changed between flights.
 
+Plant effectiveness measured in the frequency domain belongs in the robust list — it is
+a property of the airframe, not of the loop — but only when the log supports it. A
+gently flown flight excites the plant less, coherence drops, and the estimate stops
+meaning anything even though the aircraft has not changed. The report therefore gates
+it: at least 25 coherent frequency bins over a 4:1 span, an interval from resampling
+those bins, and the bin count printed next to the value, so a missing number comes with
+its reason.
+
 ### Where the data is actually informative
 
 ![frequency response and coherence](docs/img/freq_22e75c8c.png)

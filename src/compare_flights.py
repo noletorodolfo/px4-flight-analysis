@@ -529,6 +529,10 @@ def main(argv):
                              np.array(his) - np.array(vals)])
             ax.errorbar(x, vals, yerr=np.abs(err), fmt="none", ecolor=INK,
                         capsize=4, lw=1)
+        for xi_, vi in zip(x, vals):
+            if not np.isfinite(vi):
+                ax.text(xi_, 0, "not\nestimable", ha="center", va="bottom",
+                        fontsize=7, color=MUTED)
         ax.set_xticks(x); ax.set_xticklabels(names, fontsize=7, rotation=12)
         ax.set_title(f"{label} [{unit}]", fontsize=8.5, color=INK, loc="left")
         ax.set_facecolor(BG); ax.grid(True, axis="y", color=GRID, lw=0.6)

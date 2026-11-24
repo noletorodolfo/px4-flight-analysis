@@ -80,6 +80,9 @@ METRICS = {
 }
 
 NO_CI = {"vib_hf", "K_p", "K_q", "band_p", "band_pts_p"}
+# Metrics whose interval comes from the spectral fit, not the block
+# bootstrap: the figure must read it from the frequency results.
+CI_FROM_FREQ = {"K_p", "K_q"}
 
 
 def auto_window(u, t):
@@ -518,21 +521,38 @@ def main(argv):
     for ax, k in zip(axs, keys):
         label, unit, _ = METRICS[k]
         vals = [b.get(k, np.nan) for b in bases]
-        los = [np.nanpercentile(s[k], 5) if np.isfinite(s[k]).any() else np.nan
-               for s in boots]
-        his = [np.nanpercentile(s[k], 95) if np.isfinite(s[k]).any() else np.nan
-               for s in boots]
+        if k in CI_FROM_FREQ:
+            # The plant gain is not produced by the block bootstrap (it comes from
+            # one spectral fit per flight), so its interval has to be read from
+            # where it was computed: resampling the coherent frequency bins.
+            los = [(fq_ or {}).get(f"{k}_lo", np.nan) for fq_ in freqs_by_flight]
+            his = [(fq_ or {}).get(f"{k}_hi", np.nan) for fq_ in freqs_by_flight]
+        else:
+            los = [np.nanpercentile(s[k], 5) if np.isfinite(s[k]).any() else np.nan
+                   for s in boots]
+            his = [np.nanpercentile(s[k], 95) if np.isfinite(s[k]).any() else np.nan
+                   for s in boots]
         x = np.arange(len(vals))
         ax.bar(x, vals, color=[C[i % len(C)] for i in range(len(vals))], width=0.6)
-        if k not in NO_CI:
+        # room on both sides so a label on the first/last slot is not clipped
+        ax.set_xlim(-0.75, len(vals) - 0.25)
+        if k not in NO_CI or k in CI_FROM_FREQ:
             err = np.vstack([np.array(vals) - np.array(los),
                              np.array(his) - np.array(vals)])
-            ax.errorbar(x, vals, yerr=np.abs(err), fmt="none", ecolor=INK,
-                        capsize=4, lw=1)
+            if np.isfinite(err).any():
+                ax.errorbar(x, vals, yerr=np.abs(err), fmt="none", ecolor=INK,
+                            capsize=4, lw=1)
+        if not np.isfinite(vals).all():
+            # keep the y range sensible even when one bar is missing
+            finite = [v for v in vals if np.isfinite(v)]
+            if finite:
+                ax.set_ylim(0, max(max(finite), np.nanmax(his) if np.isfinite(his).any()
+                                   else 0) * 1.25)
         for xi_, vi in zip(x, vals):
             if not np.isfinite(vi):
-                ax.text(xi_, 0, "not\nestimable", ha="center", va="bottom",
-                        fontsize=7, color=MUTED)
+                ax.text(xi_, 0.5, "not\nestimable", ha="center", va="center",
+                        fontsize=7.5, color=MUTED, style="italic",
+                        transform=ax.get_xaxis_transform())
         ax.set_xticks(x); ax.set_xticklabels(names, fontsize=7, rotation=12)
         ax.set_title(f"{label} [{unit}]", fontsize=8.5, color=INK, loc="left")
         ax.set_facecolor(BG); ax.grid(True, axis="y", color=GRID, lw=0.6)

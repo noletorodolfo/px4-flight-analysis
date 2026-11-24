@@ -1,9 +1,9 @@
-"""Valida graficamente o modelo identificado por src/sindy_rates.py.
+"""Visual validation of the model identified by src/sindy_rates.py.
 
-Esquerda: derivada medida vs prevista num trecho de teste.
-Direita:  simulacao do modelo em horizonte curto (reinicia na medida a cada H s).
+Left:  measured vs predicted derivative over a held-out test window.
+Right: short-horizon simulation (re-initialised from the measurement every H s).
 
-Uso: python src/plot_sindy.py out/sindy_<id>.npy [--win 20] [--horizon 2]
+Usage: python src/plot_sindy.py out/sindy_<id>.npy [--win 20] [--horizon 2]
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ R2D = 180.0 / np.pi
 
 
 def simulate(X, U, coefs, names, hz, horizon_s, t):
-    """Integra o modelo (Euler) em janelas de horizon_s, reiniciando na medida."""
+    """Integrate the model (Euler) over horizon_s windows, restarting from data."""
     n = len(t)
     H = int(horizon_s * hz)
     sim = np.empty_like(X)
@@ -44,7 +44,7 @@ def simulate(X, U, coefs, names, hz, horizon_s, t):
 def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("npy")
-    ap.add_argument("--win", type=float, default=20.0, help="janela mostrada [s]")
+    ap.add_argument("--win", type=float, default=20.0, help="window shown [s]")
     ap.add_argument("--horizon", type=float, default=2.0)
     args = ap.parse_args(argv)
 
@@ -58,7 +58,7 @@ def main(argv):
     pred = {a: Theta @ d["coefs"][a] for a in axes_n}
     sim = simulate(X, U, d["coefs"], names, hz, args.horizon, t)
 
-    # janela de teste mais movimentada
+    # busiest test window
     te_idx = np.where(te)[0]
     w = int(args.win * hz)
     best, bi = -1, te_idx[0]
@@ -75,19 +75,19 @@ def main(argv):
     fig.patch.set_facecolor("#fcfcfb")
     for k in range(3):
         a0, a1 = axs[k, 0], axs[k, 1]
-        a0.plot(t[sl], Xdot[sl, k] * R2D, color=C_MEAS, lw=1.3, label="medido")
+        a0.plot(t[sl], Xdot[sl, k] * R2D, color=C_MEAS, lw=1.3, label="measured")
         a0.plot(t[sl], pred[axes_n[k]][sl] * R2D, color=C_MODEL, lw=1.1, ls="--",
-                label="modelo")
+                label="model")
         a0.set_ylabel(f"d{lbl[k]}/dt [deg/s²]", fontsize=9, color=INK)
-        a0.text(0.995, 0.04, f"R² teste = {d['r2'][axes_n[k]]:.3f}",
+        a0.text(0.995, 0.04, f"test R² = {d['r2'][axes_n[k]]:.3f}",
                 transform=a0.transAxes, ha="right", va="bottom", fontsize=8, color=MUTED)
 
-        a1.plot(t[sl], X[sl, k] * R2D, color=C_MEAS, lw=1.3, label="medido")
+        a1.plot(t[sl], X[sl, k] * R2D, color=C_MEAS, lw=1.3, label="measured")
         a1.plot(t[sl], sim[sl, k] * R2D, color=C_MODEL, lw=1.1, ls="--",
-                label=f"simulado ({args.horizon:g} s)")
+                label=f"simulated ({args.horizon:g} s)")
         a1.set_ylabel(f"{lbl[k]} [deg/s]", fontsize=9, color=INK)
         err = np.sqrt(np.mean((sim[te, k] - X[te, k]) ** 2)) * R2D
-        a1.text(0.995, 0.04, f"RMS horizonte {args.horizon:g}s = {err:.1f} deg/s",
+        a1.text(0.995, 0.04, f"{args.horizon:g} s horizon RMS = {err:.1f} deg/s",
                 transform=a1.transAxes, ha="right", va="bottom", fontsize=8, color=MUTED)
 
         for ax in (a0, a1):
@@ -98,21 +98,21 @@ def main(argv):
                 s.set_color(GRID)
             if k == 0:
                 ax.legend(loc="upper left", fontsize=8, frameon=False, ncol=2)
-    axs[2, 0].set_xlabel("tempo [s]", fontsize=9, color=INK)
-    axs[2, 1].set_xlabel("tempo [s]", fontsize=9, color=INK)
+    axs[2, 0].set_xlabel("time [s]", fontsize=9, color=INK)
+    axs[2, 1].set_xlabel("time [s]", fontsize=9, color=INK)
     name = os.path.basename(args.npy).replace("sindy_", "").replace(".npy", "")
-    fig.suptitle(f"Modelo identificado — {name}  "
-                 f"(entrada {d['source']}, atraso {d['lag_s']*1000:.0f} ms, "
-                 f"grade {hz:g} Hz) — trecho de teste", fontsize=11, color=INK,
+    fig.suptitle(f"Identified model — {name}  "
+                 f"(input {d['source']}, lag {d['lag_s']*1000:.0f} ms, "
+                 f"grid {hz:g} Hz) — test segment", fontsize=11, color=INK,
                  x=0.01, ha="left")
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     out = os.path.join("out", f"sindy_val_{name}.png")
     fig.savefig(out, dpi=130)
-    print("figura:", out)
+    print("figure:", out)
     for k in range(3):
         e = np.sqrt(np.mean((sim[te, k] - X[te, k]) ** 2)) * R2D
-        print(f"  {lbl[k]}: RMS simulacao {args.horizon:g}s = {e:6.2f} deg/s   "
-              f"(std do sinal = {np.std(X[te,k])*R2D:6.2f} deg/s)")
+        print(f"  {lbl[k]}: {args.horizon:g} s simulation RMS = {e:6.2f} deg/s   "
+              f"(signal std = {np.std(X[te,k])*R2D:6.2f} deg/s)")
     return 0
 
 

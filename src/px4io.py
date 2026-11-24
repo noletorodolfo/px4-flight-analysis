@@ -1,4 +1,4 @@
-"""Leitura de logs .ulg do PX4 para DataFrames pandas."""
+"""Reading PX4 .ulg logs into pandas DataFrames."""
 from __future__ import annotations
 
 import numpy as np
@@ -17,7 +17,7 @@ def load(path: str, topics: list[str] | None = None) -> ULog:
 
 
 def to_df(ulog: ULog, name: str, multi_id: int = 0) -> pd.DataFrame:
-    """Um topico como DataFrame, com indice de tempo em segundos desde o inicio do log."""
+    """One topic as a DataFrame, indexed by seconds since the start of the log."""
     d = ulog.get_dataset(name, multi_id)
     df = pd.DataFrame({k: v for k, v in d.data.items()})
     t0 = ulog.start_timestamp
@@ -26,7 +26,7 @@ def to_df(ulog: ULog, name: str, multi_id: int = 0) -> pd.DataFrame:
 
 
 def quat_to_euler(q0, q1, q2, q3) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Quaternion PX4 (w,x,y,z, NED/FRD) -> roll, pitch, yaw em radianos."""
+    """PX4 quaternion (w,x,y,z, NED/FRD) -> roll, pitch, yaw in radians."""
     q0, q1, q2, q3 = (np.asarray(x, dtype=np.float64) for x in (q0, q1, q2, q3))
     n = np.sqrt(q0**2 + q1**2 + q2**2 + q3**2)
     n[n == 0] = 1.0
@@ -51,7 +51,7 @@ def wrap_pi(x):
 
 def resample_join(frames: list[pd.DataFrame], hz: float,
                   t_start: float | None = None, t_end: float | None = None) -> pd.DataFrame:
-    """Reamostra varios DataFrames numa grade uniforme (interpolacao linear)."""
+    """Resample several DataFrames onto a uniform grid (linear interpolation)."""
     lo = max(f.index[0] for f in frames) if t_start is None else t_start
     hi = min(f.index[-1] for f in frames) if t_end is None else t_end
     grid = np.arange(lo, hi, 1.0 / hz)
@@ -69,7 +69,7 @@ def resample_join(frames: list[pd.DataFrame], hz: float,
 
 
 def armed_intervals(ulog: ULog) -> list[tuple[float, float]]:
-    """Trechos armados, em segundos desde o inicio do log."""
+    """Armed intervals, in seconds since the start of the log."""
     try:
         vs = to_df(ulog, "vehicle_status")
     except (KeyError, IndexError):

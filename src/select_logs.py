@@ -1,16 +1,16 @@
-"""Seleciona logs candidatos no banco publico da PX4 Flight Review.
+"""Select candidate logs from the public PX4 Flight Review database.
 
-Baixe o indice antes:
+Download the index first:
   curl -sSL https://review.px4.io/dbinfo | gunzip > dbinfo.json
-Uso: python src/select_logs.py dbinfo.json
-Gera candidates.json no diretorio atual.
+Usage: python src/select_logs.py dbinfo.json
+Writes candidates.json in the current directory.
 """
 import json, sys
 
 MODES = {0:"Manual",1:"Altitude",2:"Position",3:"Mission",4:"Hold",5:"Return",6:"Acro",
          7:"Offboard",8:"Stabilized",10:"Takeoff",11:"Land",12:"Descend",13:"FollowMe",
          14:"PrecLand",15:"Orbit"}
-MANUAL = {0,6,8}  # manobras com piloto no loop
+MANUAL = {0,6,8}  # pilot-in-the-loop manoeuvring
 
 path = sys.argv[1]
 with open(path, 'r', encoding='utf-8', errors='replace') as f:
@@ -51,9 +51,9 @@ while i < n:
         'url': obj.get('download_url'), 'desc': (obj.get('description') or '')[:60],
     })
 
-print(f"total logs no banco: {total}; candidatos: {len(out)}")
+print(f"logs in the database: {total}; candidates: {len(out)}")
 out.sort(key=lambda r: (r['date'] or '', r['manual_s']), reverse=True)
 json.dump(out, open('candidates.json','w'), indent=1)
 for r in out[:25]:
     print(f"{r['date']} {r['dur']:5}s manual={r['manual_s']:4}s {r['mav']:12} {str(r['rel'])[:12]:12} {str(r['hw'])[:18]:18} {r['log_id']}")
-    print(f"    modos={r['modes']} | {r['desc']}")
+    print(f"    modes={r['modes']} | {r['desc']}")

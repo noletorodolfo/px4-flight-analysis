@@ -65,7 +65,7 @@ Run every script from the repository root; they read `data/` and write to `out/`
 
 ### A loss of control, readable in one panel
 
-![flight report](docs/img/relatorio_ac5a5608.png)
+![flight report](docs/img/report_ac5a5608.png)
 
 At t ≈ 178 s the attitude error explodes, the motors go to 0 and 1 simultaneously (the
 allocator is out of authority), GPS innovations blow up and vibration spikes. None of
@@ -73,7 +73,7 @@ those four alone says "crash"; all four at the same instant do.
 
 ### A controller gain change, separated from flying conditions
 
-![flight comparison](docs/img/comparacao_ganho_al_ganho_ba.png)
+![flight comparison](docs/img/comparison_high_gai_low_gain.png)
 
 Two flights of the same airframe on the same day, `MC_ROLLRATE_P` 0.11 → 0.05. Raw RMS
 error doubled — but the second flight was also flown twice as hard, and the error
@@ -106,7 +106,7 @@ is none.
 
 ### A negative result, with the evidence to back it
 
-![inertia identifiability](docs/img/inercia_22e75c8c.png)
+![inertia identifiability](docs/img/inertia_22e75c8c.png)
 
 Inertia ratios **cannot** be recovered from these operational logs. Not by time-domain
 sparse regression, not in weak form, not with instrumental variables. The cost surface
@@ -144,7 +144,7 @@ Every report ends with the flight's position in that distribution, e.g.
 To recalibrate against your own fleet:
 
 ```bash
-python src/calibrate_thresholds.py my_log_ids.txt --out out/calibracao.json
+python src/calibrate_thresholds.py my_log_ids.txt --out out/calibration.json
 ```
 
 ---

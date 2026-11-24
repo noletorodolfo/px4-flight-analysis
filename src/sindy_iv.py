@@ -1,26 +1,27 @@
-"""Identificacao com variavel instrumental (2SLS) para dado de malha fechada.
+"""Instrumental-variable identification (2SLS) for closed-loop flight data.
 
-Problema: num voo normal o comando e gerado pelo controlador a partir do estado
-(u = -K x). Regressores e residuo ficam correlacionados e os coeficientes saem
-enviesados — foi assim que apareceu amortecimento POSITIVO (nao fisico) nos
-ajustes por minimos quadrados comuns.
+Problem: in a normal flight the command is produced by the controller from the
+state (u = -K x). Regressors and residual become correlated and the coefficients
+are biased — that is how POSITIVE (non-physical) damping showed up in ordinary
+least squares.
 
-Remedio classico: usar um sinal **exogeno** como instrumento. Aqui o instrumento
-e o comando do piloto (`manual_control_setpoint`), que entra no sistema de fora
-e nao e calculado a partir do estado estimado. Fazemos minimos quadrados em dois
-estagios (2SLS):
+Classic remedy: use an **exogenous** signal as an instrument. Here the instrument
+is the pilot command (`manual_control_setpoint`), which enters the system from
+outside and is not computed from the estimated state. Two-stage least squares:
 
-  estagio 1: projeta cada regressor no espaco dos instrumentos Z;
-  estagio 2: regride a derivada nos regressores projetados.
+  stage 1: project each regressor onto the space spanned by the instruments Z;
+  stage 2: regress the derivative on the projected regressors.
 
-O relatorio imprime a **forca do instrumento** (R2 do primeiro estagio): com
-instrumento fraco a estimativa 2SLS e pior que a comum, e isso precisa ficar
-visivel em vez de escondido.
+The report prints the **instrument strength** (first-stage R2): with a weak
+instrument the 2SLS estimate is worse than plain least squares, and that has to
+be visible rather than hidden.
 
-Hipotese assumida (e discutivel): o piloto reage ao veiculo com atraso maior que
-a escala de tempo da malha de taxas, entao o stick e aproximadamente exogeno.
+Assumption (and it is debatable): the pilot reacts to the aircraft with a delay
+longer than the time scale of the rate loop, so the stick is approximately
+exogenous.
 
-Uso: python src/sindy_iv.py data/ulg/<id>/<id>.ulg [--modes Manual] [--lags 0 0.1 0.2 0.3]
+Usage: python src/sindy_iv.py data/ulg/<id>/<id>.ulg [--modes Manual]
+                              [--lags 0 0.1 0.2 0.3]
 """
 from __future__ import annotations
 
@@ -38,29 +39,29 @@ from sindy_physical import inertia_coefs, r2  # noqa: E402
 R2D = 180.0 / np.pi
 
 
-def instrumentos(ulog, t_grid, hz, lags_s):
-    """Matriz Z: canais do stick atrasados + constante."""
+def instruments(ulog, t_grid, hz, lags_s):
+    """Matrix Z: lagged stick channels plus a constant."""
     mc = px4io.to_df(ulog, "manual_control_setpoint")
-    canais = [c for c in ("roll", "pitch", "yaw", "throttle") if c in mc.columns]
-    if not canais:
+    channels = [c for c in ("roll", "pitch", "yaw", "throttle") if c in mc.columns]
+    if not channels:
         return None, []
     base = np.column_stack([np.interp(t_grid, mc.index.to_numpy(),
-                                      mc[c].to_numpy()) for c in canais])
-    cols, nomes = [np.ones(len(t_grid))], ["1"]
+                                      mc[c].to_numpy()) for c in channels])
+    cols, names = [np.ones(len(t_grid))], ["1"]
     for L in lags_s:
         k = int(round(L * hz))
-        for j, c in enumerate(canais):
+        for j, c in enumerate(channels):
             x = base[:, j]
             if k > 0:
                 x = np.concatenate([np.full(k, x[0]), x[:-k]])
             cols.append(x)
-            nomes.append(f"{c}(-{L:g}s)")
-    return np.column_stack(cols), nomes
+            names.append(f"{c}(-{L:g}s)")
+    return np.column_stack(cols), names
 
 
-def dois_estagios(Xreg, y, Z):
-    """2SLS. Devolve beta, R2 do primeiro estagio por regressor e R2 final."""
-    Zq, _ = np.linalg.qr(Z)                      # base ortonormal do espaco de Z
+def two_stage(Xreg, y, Z):
+    """2SLS. Returns beta, the first-stage R2 per regressor and the final R2."""
+    Zq, _ = np.linalg.qr(Z)                      # orthonormal basis of span(Z)
     Xhat = Zq @ (Zq.T @ Xreg)
     r2_1 = []
     for j in range(Xreg.shape[1]):
@@ -91,69 +92,69 @@ def main(argv):
     t, X, Xdot, U, g = sr.build_dataset(ulog, args.hz, args.fc, args.modes,
                                         None, None, "torque")
     U = sr.first_order_lag(U, args.lag, args.hz)
-    nome = os.path.basename(args.ulg)[:8]
+    name = os.path.basename(args.ulg)[:8]
 
-    Z, znomes = instrumentos(ulog, t, args.hz, args.lags)
+    Z, znames = instruments(ulog, t, args.hz, args.lags)
     print("=" * 78)
-    print(f"Variavel instrumental (2SLS) — {nome}")
-    print(f"{len(t)} amostras @ {args.hz:g} Hz, modos={args.modes}")
+    print(f"Instrumental variables (2SLS) — {name}")
+    print(f"{len(t)} samples @ {args.hz:g} Hz, modes={args.modes}")
     if Z is None:
-        print("sem manual_control_setpoint utilizavel: 2SLS impossivel neste log")
+        print("no usable manual_control_setpoint: 2SLS not possible on this log")
         return 1
-    print(f"instrumentos: {len(znomes)} colunas "
-          f"({', '.join(znomes[1:5])}, ... atrasos {args.lags})")
+    print(f"instruments: {len(znames)} columns "
+          f"({', '.join(znames[1:5])}, ... lags {args.lags})")
 
     a = inertia_coefs(args.ky, args.kz)
     p, q, r_ = X[:, 0], X[:, 1], X[:, 2]
     T = U[:, 3]
     gyros = [q * r_, p * r_, p * q]
-    estados = [p, q, r_]
-    eixos = ["p_dot", "q_dot", "r_dot"]
+    states = [p, q, r_]
+    axes = ["p_dot", "q_dot", "r_dot"]
 
-    print("\nmodelo por eixo:  x_dot = a*gyro + b0*tau + b1*tau*T - c*estado")
-    print(f"(coeficientes giroscopicos fixados em Iy/Ix={args.ky}, Iz/Ix={args.kz}: "
+    print("\nper-axis model:  x_dot = a*gyro + b0*tau + b1*tau*T - c*state")
+    print(f"(gyroscopic coefficients fixed at Iy/Ix={args.ky}, Iz/Ix={args.kz}: "
           f"{a.round(3)})\n")
 
-    for i, nm in enumerate(eixos):
+    for i, nm in enumerate(axes):
         y = Xdot[:, i] - a[i] * gyros[i]
-        Xreg = np.column_stack([U[:, i], U[:, i] * T, -estados[i]])
-        nomes = ["b0 (tau)", "b1 (tau*T)", "c (amortecimento)"]
+        Xreg = np.column_stack([U[:, i], U[:, i] * T, -states[i]])
+        names = ["b0 (tau)", "b1 (tau*T)", "c (damping)"]
         ols = np.linalg.lstsq(Xreg, y, rcond=None)[0]
         r2_ols = r2(y, Xreg @ ols)
-        iv, r2_primeiro, r2_iv = dois_estagios(Xreg, y, Z)
+        iv, r2_first, r2_iv = two_stage(Xreg, y, Z)
         print(f"--- {nm}")
-        print(f"    {'coeficiente':22} {'MQO':>12} {'2SLS':>12}   "
-              f"{'forca do instrumento (R2 1o estagio)':>12}")
-        for j, cn in enumerate(nomes):
-            print(f"    {cn:22} {ols[j]:12.4g} {iv[j]:12.4g}   {r2_primeiro[j]:12.3f}")
-        print(f"    R2 do ajuste: MQO {r2_ols:.3f} | 2SLS {r2_iv:.3f}")
+        print(f"    {'coefficient':22} {'OLS':>12} {'2SLS':>12}   "
+              f"{'instrument strength (1st-stage R2)':>12}")
+        for j, cn in enumerate(names):
+            print(f"    {cn:22} {ols[j]:12.4g} {iv[j]:12.4g}   {r2_first[j]:12.3f}")
+        print(f"    fit R2: OLS {r2_ols:.3f} | 2SLS {r2_iv:.3f}")
         c_ols, c_iv = ols[2], iv[2]
-        def leitura(c):
+        def reading(c):
             if c > 1e-6:
-                return f"amortecimento {c:+.3g} 1/s (fisico: >0 nesta convencao)"
-            return f"amortecimento {c:+.3g} 1/s  <- NEGATIVO, nao fisico"
-        print(f"    MQO : {leitura(c_ols)}")
-        print(f"    2SLS: {leitura(c_iv)}")
-        # b0 e b1 sao quase colineares (tau e tau*T): o que e identificavel e o
-        # ganho efetivo no empuxo tipico, nao a divisao entre os dois termos
+                return f"damping {c:+.3g} 1/s (physical: >0 in this convention)"
+            return f"damping {c:+.3g} 1/s  <- NEGATIVE, non-physical"
+        print(f"    OLS : {reading(c_ols)}")
+        print(f"    2SLS: {reading(c_iv)}")
+        # b0 and b1 are nearly collinear (tau and tau*T): what is identifiable is
+        # the effective gain at typical thrust, not the split between the terms
         Tm = float(np.mean(T))
         ge_ols = ols[0] + ols[1] * Tm
         ge_iv = iv[0] + iv[1] * Tm
-        print(f"    ganho de controle efetivo em T medio ({Tm:.2f}): "
-              f"MQO {ge_ols:.1f}  |  2SLS {ge_iv:.1f} rad/s² por unidade de tau "
-              f"(diferenca {100*(ge_iv-ge_ols)/abs(ge_ols):+.0f}%)")
+        print(f"    effective control gain at mean T ({Tm:.2f}): "
+              f"OLS {ge_ols:.1f}  |  2SLS {ge_iv:.1f} rad/s² per unit tau "
+              f"(difference {100*(ge_iv-ge_ols)/abs(ge_ols):+.0f}%)")
         print()
 
-    # o instrumento e forte o bastante?
-    print("--- diagnostico do instrumento")
+    # is the instrument strong enough?
+    print("--- instrument diagnostics")
     Xall = np.column_stack([U[:, 0], U[:, 1], U[:, 2], T])
-    _, r2_1, _ = dois_estagios(Xall, Xdot[:, 0], Z)
+    _, r2_1, _ = two_stage(Xall, Xdot[:, 0], Z)
     for nm, v in zip(["tau_x", "tau_y", "tau_z", "T"], r2_1):
-        marca = ("forte" if v > 0.5 else "fraco" if v > 0.2 else "MUITO FRACO")
-        print(f"    {nm:6}: R2 do primeiro estagio = {v:.3f}  ({marca})")
-    print("\n    instrumento fraco => a estimativa 2SLS tem variancia alta e pode "
-          "ser pior que o MQO; nesse caso o resultado nao corrige o vies, so o "
-          "troca por ruido.")
+        mark = ("strong" if v > 0.5 else "weak" if v > 0.2 else "VERY WEAK")
+        print(f"    {nm:6}: first-stage R2 = {v:.3f}  ({mark})")
+    print("\n    a weak instrument means the 2SLS estimate has high variance and "
+          "may be worse than OLS; in that case the result does not remove the "
+          "bias, it only trades it for noise.")
     return 0
 
 

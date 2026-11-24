@@ -1,22 +1,22 @@
-"""Identificacao com biblioteca restrita a termos fisicamente admissiveis.
+"""Identification with a library restricted to physically admissible terms.
 
-Modelo (Euler, corpo rigido, eixos principais), com as tres equacoes acopladas
-por um unico par de razoes de inercia ky = Iy/Ix, kz = Iz/Ix:
+Euler rigid-body model on principal axes, with the three equations coupled by a
+single pair of inertia ratios ky = Iy/Ix, kz = Iz/Ix:
 
     p_dot = (ky - kz)     * q*r + (bx0 + bx1*T) * tau_x - cx * p
     q_dot = (kz - 1)/ky   * p*r + (by0 + by1*T) * tau_y - cy * q
     r_dot = (1 - ky)/kz   * p*q + (bz0 + bz1*T) * tau_z - cz * r
 
-Restricoes impostas: efetividade de controle positiva (b >= 0), amortecimento
-aerodinamico nao negativo (c >= 0) e razoes de inercia positivas. Nao ha termo
-constante nem termos cruzados sem justificativa fisica.
+Constraints: positive control effectiveness (b >= 0), non-negative aerodynamic
+damping (c >= 0) and positive inertia ratios. No constant term and no cross
+terms without a physical justification.
 
-Dado (ky, kz), o problema e linear nos demais parametros -> o ajuste e uma
-busca em duas dimensoes com minimos quadrados limitados por dentro. Isso
-permite varrer a superficie de custo e dizer se as inercias sao de fato
-identificaveis neste voo, em vez de so reportar um numero.
+Given (ky, kz) the problem is linear in the remaining parameters, so the fit is
+a two-dimensional search with bounded least squares inside. That makes it cheap
+to sweep the whole cost surface and say whether the inertias are identifiable at
+all in this flight, instead of just reporting a number.
 
-Uso:
+Usage:
   python src/sindy_physical.py data/ulg/<id>/<id>.ulg [--hz 50] [--modes Manual]
 """
 from __future__ import annotations
@@ -41,12 +41,12 @@ INK, MUTED, GRID = "#1a1a1a", "#6b6b6b", "#e3e3e0"
 
 
 def inertia_coefs(ky: float, kz: float) -> np.ndarray:
-    """Coeficientes giroscopicos a partir das razoes de inercia (Ix = 1)."""
+    """Gyroscopic coefficients from the inertia ratios (Ix = 1)."""
     return np.array([ky - kz, (kz - 1.0) / ky, (1.0 - ky) / kz])
 
 
 def fit_linear_part(X, Xdot, U, a, idx, bounded=True):
-    """Com os coeficientes giroscopicos fixos, ajusta [b0, b1, c] de um eixo."""
+    """With the gyroscopic coefficients fixed, fit [b0, b1, c] for one axis."""
     p, q, r = X[:, 0], X[:, 1], X[:, 2]
     T = U[:, 3]
     gyro = [q * r, p * r, p * q][idx]
@@ -114,11 +114,11 @@ def main(argv):
     name = os.path.basename(args.ulg)[:8]
 
     print("=" * 76)
-    print(f"Modelo fisico restrito — {name}")
-    print(f"entrada={g['source']}  atraso={args.lag*1000:.0f} ms  grade={args.hz:g} Hz  "
-          f"{len(t)} amostras  modos={args.modes}")
+    print(f"Physics-constrained model — {name}")
+    print(f"input={g['source']}  lag={args.lag*1000:.0f} ms  grid={args.hz:g} Hz  "
+          f"{len(t)} samples  modes={args.modes}")
 
-    # ---------------------------------------------------------- ajuste
+    # ------------------------------------------------------------- fit
     def obj(z):
         return cost(np.exp(z[0]), np.exp(z[1]), X, Xdot, U, tr)[0]
 
@@ -131,50 +131,51 @@ def main(argv):
             best = res
     ky, kz = np.exp(best.x)
     sse_free = best.fun
-    # ponto de referencia fisico: quad aproximadamente plano e simetrico
+    # physical reference point: an approximately flat, symmetric quad
     sse_planar = cost(1.0, 2.0, X, Xdot, U, tr)[0]
-    # desigualdade triangular do tensor de inercia: |Ix-Iy| <= Iz <= Ix+Iy
+    # inertia-tensor triangle inequality: |Ix-Iy| <= Iz <= Ix+Iy
     tri_ok = abs(1.0 - ky) <= kz <= 1.0 + ky
     a = inertia_coefs(ky, kz)
     _, parts = cost(ky, kz, X, Xdot, U, tr)
     betas = [pp[0] for pp in parts]
 
-    print(f"\nrazoes de inercia ajustadas (livre):  Iy/Ix = {ky:.3f}   Iz/Ix = {kz:.3f}")
-    print(f"  desigualdade triangular (|Ix-Iy| <= Iz <= Ix+Iy): "
-          f"{'satisfeita' if tri_ok else 'VIOLADA'}")
-    print(f"  SSE no otimo livre          = {sse_free:.6g}")
-    print(f"  SSE em (Iy/Ix=1, Iz/Ix=2)   = {sse_planar:.6g}  "
-          f"({100*(sse_planar-sse_free)/sse_free:+.2f}% em relacao ao otimo)")
-    print("  -> quad plano e simetrico tem Iz ~ Ix+Iy, isto e Iz/Ix ~ 2;"
-          " Iz/Ix << 1 so existe em corpo alongado no eixo vertical")
-    print(f"coeficientes giroscopicos:   (Iy-Iz)/Ix = {a[0]:+.3f}   "
+    print(f"\nfitted inertia ratios (unconstrained):  Iy/Ix = {ky:.3f}   "
+          f"Iz/Ix = {kz:.3f}")
+    print(f"  triangle inequality (|Ix-Iy| <= Iz <= Ix+Iy): "
+          f"{'satisfied' if tri_ok else 'VIOLATED'}")
+    print(f"  SSE at the free optimum     = {sse_free:.6g}")
+    print(f"  SSE at (Iy/Ix=1, Iz/Ix=2)   = {sse_planar:.6g}  "
+          f"({100*(sse_planar-sse_free)/sse_free:+.2f}% relative to the optimum)")
+    print("  -> a flat, symmetric quad has Iz ~ Ix+Iy, i.e. Iz/Ix ~ 2;"
+          " Iz/Ix << 1 only exists for a body elongated along the vertical axis")
+    print(f"gyroscopic coefficients:   (Iy-Iz)/Ix = {a[0]:+.3f}   "
           f"(Iz-Ix)/Iy = {a[1]:+.3f}   (Ix-Iy)/Iz = {a[2]:+.3f}")
-    print("\nparametros por eixo (b0 + b1*T = efetividade; c = amortecimento):")
+    print("\nper-axis parameters (b0 + b1*T = effectiveness; c = damping):")
     axes_n = ["p_dot", "q_dot", "r_dot"]
     for i, nm in enumerate(axes_n):
         b0, b1, c = betas[i]
         print(f"  {nm}:  b0 = {b0:8.2f}   b1 = {b1:8.2f}   c = {c:7.3f} 1/s"
-              + (f"   (tau = {1/c:.2f} s)" if c > 1e-6 else "   (sem amortecimento)"))
+              + (f"   (tau = {1/c:.2f} s)" if c > 1e-6 else "   (no damping)"))
 
     Yhat = predict(X, U, a, betas)
-    print("\najuste (R2):")
+    print("\nfit (R2):")
     for i, nm in enumerate(axes_n):
-        print(f"  {nm}: treino {r2(Xdot[tr, i], Yhat[tr, i]):6.3f}   "
-              f"teste {r2(Xdot[te, i], Yhat[te, i]):6.3f}   "
-              f"residuo RMS {np.std(Xdot[te, i]-Yhat[te, i])*R2D:7.1f} deg/s^2")
+        print(f"  {nm}: train {r2(Xdot[tr, i], Yhat[tr, i]):6.3f}   "
+              f"test {r2(Xdot[te, i], Yhat[te, i]):6.3f}   "
+              f"residual RMS {np.std(Xdot[te, i]-Yhat[te, i])*R2D:7.1f} deg/s^2")
 
-    # ----------------------------------- identificabilidade das inercias
-    print("\n--- o termo giroscopico e visivel no meio do ruido?")
+    # ------------------------------------- identifiability of the inertias
+    print("\n--- is the gyroscopic term visible above the noise?")
     p, q, r = X[:, 0], X[:, 1], X[:, 2]
     gyros = [q * r, p * r, p * q]
     gyro_names = ["q*r", "p*r", "p*q"]
     for i, nm in enumerate(axes_n):
         contrib = np.std(a[i] * gyros[i]) * R2D
         resid = np.std(Xdot[te, i] - Yhat[te, i]) * R2D
-        print(f"  {nm}: contribuicao de {gyro_names[i]:4} = {contrib:7.2f} deg/s^2   "
-              f"residuo = {resid:7.1f} deg/s^2   razao = {contrib/resid:6.3f}")
+        print(f"  {nm}: contribution of {gyro_names[i]:4} = {contrib:7.2f} deg/s^2   "
+              f"residual = {resid:7.1f} deg/s^2   ratio = {contrib/resid:6.3f}")
 
-    # superficie de custo (perfil) em (ky, kz)
+    # cost surface (profile) over (ky, kz)
     n = args.grid
     kys = np.linspace(0.4, 2.2, n)
     kzs = np.linspace(0.4, 3.6, n)
@@ -183,29 +184,30 @@ def main(argv):
         for j, kyj in enumerate(kys):
             Z[i, j] = cost(kyj, kzi, X, Xdot, U, tr)[0]
     Zmin = Z.min()
-    rel = (Z - Zmin) / Zmin * 100.0  # piora percentual do SSE
+    rel = (Z - Zmin) / Zmin * 100.0  # percentage increase of the SSE
     inside = rel < 1.0
-    print(f"\n--- superficie de custo em (Iy/Ix, Iz/Ix), grade {n}x{n}")
-    print(f"  piora maxima do SSE em toda a faixa varrida: {rel.max():.2f}%")
-    print(f"  fracao da faixa que fica a menos de 1% do minimo: "
+    print(f"\n--- cost surface over (Iy/Ix, Iz/Ix), {n}x{n} grid")
+    print(f"  largest SSE increase across the swept range: {rel.max():.2f}%")
+    print(f"  fraction of the range within 1% of the minimum: "
           f"{100*inside.mean():.1f}%")
     if inside.any():
-        print(f"  faixa de Iy/Ix dentro de 1%: "
-              f"{kys[inside.any(axis=0)].min():.2f} a {kys[inside.any(axis=0)].max():.2f}")
-        print(f"  faixa de Iz/Ix dentro de 1%: "
-              f"{kzs[inside.any(axis=1)].min():.2f} a {kzs[inside.any(axis=1)].max():.2f}")
+        print(f"  Iy/Ix range within 1%: "
+              f"{kys[inside.any(axis=0)].min():.2f} to {kys[inside.any(axis=0)].max():.2f}")
+        print(f"  Iz/Ix range within 1%: "
+              f"{kzs[inside.any(axis=1)].min():.2f} to {kzs[inside.any(axis=1)].max():.2f}")
 
-    # quanto de excitacao faltou
-    print("\n--- excitacao necessaria para enxergar as inercias")
+    # how much excitation was missing
+    print("\n--- excitation required to see the inertias")
     for i, nm in enumerate(axes_n):
         resid = np.std(Xdot[te, i] - Yhat[te, i])
-        need = 3 * resid / max(abs(a[i]), 1e-6)   # |gyro| para contribuir 3x o residuo
+        need = 3 * resid / max(abs(a[i]), 1e-6)   # |gyro| to contribute 3x the residual
         have = np.std(gyros[i])
-        print(f"  {nm}: std({gyro_names[i]}) atual = {have:7.4f} rad^2/s^2   "
-              f"necessario ~{need:7.4f}   fator {need/max(have,1e-9):6.1f}x")
+        print(f"  {nm}: current std({gyro_names[i]}) = {have:7.4f} rad^2/s^2   "
+              f"required ~{need:7.4f}   factor {need/max(have,1e-9):6.1f}x")
 
-    # -------- teste decisivo: o termo giroscopico fisico melhora a previsao?
-    print("\n--- o termo giroscopico com inercia de quad plano (Iy/Ix=1, Iz/Ix=2) ajuda?")
+    # ----- decisive test: does the physical gyroscopic term improve prediction?
+    print("\n--- does the gyroscopic term with flat-quad inertia "
+          "(Iy/Ix=1, Iz/Ix=2) help?")
     a_ref = inertia_coefs(1.0, 2.0)
     for i, nm in enumerate(axes_n):
         b_with = fit_linear_part(X[tr], Xdot[tr], U[tr], a_ref, i)[0]
@@ -214,13 +216,13 @@ def main(argv):
         Bn = [b_none if j == i else np.zeros(3) for j in range(3)]
         rw = r2(Xdot[te, i], predict(X, U, a_ref, Bw)[te, i])
         rn = r2(Xdot[te, i], predict(X, U, np.zeros(3), Bn)[te, i])
-        verdict = "ajuda" if rw - rn > 0.005 else ("indiferente" if rw - rn > -0.005
-                                                   else "ATRAPALHA")
-        print(f"  {nm}: com termo R2 = {rw:.4f}   sem termo R2 = {rn:.4f}   "
-              f"ganho = {rw-rn:+.4f}  -> {verdict}")
+        verdict = "helps" if rw - rn > 0.005 else ("indifferent" if rw - rn > -0.005
+                                                   else "HURTS")
+        print(f"  {nm}: with term R2 = {rw:.4f}   without term R2 = {rn:.4f}   "
+              f"gain = {rw-rn:+.4f}  -> {verdict}")
 
-    # ------------------------- estabilidade: o mesmo numero sai de cada trecho?
-    print("\n--- estabilidade da estimativa (ajuste independente por trecho)")
+    # ------------------- stability: does each segment give the same number?
+    print("\n--- stability of the estimate (independent fit per segment)")
     nchunk = args.chunks
     edges = np.array_split(np.arange(len(t)), nchunk)
     kys_c, kzs_c = [], []
@@ -235,40 +237,40 @@ def main(argv):
                       bounds=[(np.log(0.3), np.log(3.0)), (np.log(0.3), np.log(4.0))])
         kyc, kzc = np.exp(rc.x)
         kys_c.append(kyc); kzs_c.append(kzc)
-        print(f"  trecho {ci+1} ({t[ids[0]]:6.1f}-{t[ids[-1]]:6.1f} s): "
+        print(f"  segment {ci+1} ({t[ids[0]]:6.1f}-{t[ids[-1]]:6.1f} s): "
               f"Iy/Ix = {kyc:5.2f}   Iz/Ix = {kzc:5.2f}")
     kys_c, kzs_c = np.array(kys_c), np.array(kzs_c)
-    print(f"  dispersao: Iy/Ix = {kys_c.mean():.2f} +- {kys_c.std():.2f}   "
+    print(f"  spread: Iy/Ix = {kys_c.mean():.2f} +- {kys_c.std():.2f}   "
           f"Iz/Ix = {kzs_c.mean():.2f} +- {kzs_c.std():.2f}")
-    print(f"  faixa: Iy/Ix {kys_c.min():.2f}..{kys_c.max():.2f}   "
+    print(f"  range: Iy/Ix {kys_c.min():.2f}..{kys_c.max():.2f}   "
           f"Iz/Ix {kzs_c.min():.2f}..{kzs_c.max():.2f}")
 
-    # ------------------------------- comparacao com a biblioteca irrestrita
-    print("\n--- comparacao com a biblioteca irrestrita (src/sindy_rates.py)")
+    # ----------------------------- comparison with the unconstrained library
+    print("\n--- comparison with the unconstrained library (src/sindy_rates.py)")
     Theta, names = sr.library(X, U)
     for i, nm in enumerate(axes_n):
         xi, _ = sr.stlsq(Theta[tr], Xdot[tr, i], 0.1)
         r2u = r2(Xdot[te, i], Theta[te] @ xi)
         r2p = r2(Xdot[te, i], Yhat[te, i])
-        print(f"  {nm}: fisico {r2p:6.3f}  vs  irrestrito {r2u:6.3f}   "
-              f"(diferenca {r2u-r2p:+.3f}, {int(np.sum(np.abs(xi)>0))} termos)")
+        print(f"  {nm}: physical {r2p:6.3f}  vs  unconstrained {r2u:6.3f}   "
+              f"(difference {r2u-r2p:+.3f}, {int(np.sum(np.abs(xi)>0))} terms)")
 
-    # ------------------------------------------------------------ figura
+    # ------------------------------------------------------------ figure
     fig, axs = plt.subplots(1, 2, figsize=(13, 5.2))
     fig.patch.set_facecolor("#fcfcfb")
     ax = axs[0]
     cs = ax.contourf(kys, kzs, np.clip(rel, 0, 5), levels=20, cmap="BuPu_r")
     ax.contour(kys, kzs, rel, levels=[0.1, 0.5, 1.0], colors=[C_MODEL], linewidths=1.0)
-    ax.plot([ky], [kz], "o", color=C_MODEL, ms=7, label="ajuste")
+    ax.plot([ky], [kz], "o", color=C_MODEL, ms=7, label="fit")
     ax.plot(kys_c, kzs_c, "x", color="#444", ms=6, mew=1.4,
-            label=f"ajuste por trecho (n={nchunk})")
-    ax.plot([1.0], [2.0], "s", color=C_MEAS, ms=7, label="quad plano ideal (Iz=Ix+Iy)")
+            label=f"per-segment fit (n={nchunk})")
+    ax.plot([1.0], [2.0], "s", color=C_MEAS, ms=7, label="ideal flat quad (Iz=Ix+Iy)")
     ax.set_xlabel("Iy / Ix", color=INK, fontsize=9)
     ax.set_ylabel("Iz / Ix", color=INK, fontsize=9)
-    ax.set_title("piora do SSE [%] — plano das razoes de inercia",
+    ax.set_title("SSE increase [%] — inertia-ratio plane",
                  fontsize=10, color=INK, loc="left")
     ax.legend(fontsize=8, frameon=False, loc="upper left")
-    fig.colorbar(cs, ax=ax, label="% acima do minimo")
+    fig.colorbar(cs, ax=ax, label="% above the minimum")
 
     ax = axs[1]
     labels, contribs, resids = [], [], []
@@ -277,12 +279,12 @@ def main(argv):
         contribs.append(np.std(a[i] * gyros[i]) * R2D)
         resids.append(np.std(Xdot[te, i] - Yhat[te, i]) * R2D)
     xpos = np.arange(3)
-    ax.bar(xpos - 0.2, resids, 0.38, color=C_MEAS, label="residuo do modelo")
-    ax.bar(xpos + 0.2, contribs, 0.38, color=C_MODEL, label="termo giroscopico")
+    ax.bar(xpos - 0.2, resids, 0.38, color=C_MEAS, label="model residual")
+    ax.bar(xpos + 0.2, contribs, 0.38, color=C_MODEL, label="gyroscopic term")
     ax.set_xticks(xpos); ax.set_xticklabels(labels, color=INK)
     ax.set_yscale("log")
-    ax.set_ylabel("desvio padrao [deg/s²]", color=INK, fontsize=9)
-    ax.set_title("o sinal que carrega a inercia esta abaixo do ruido",
+    ax.set_ylabel("standard deviation [deg/s²]", color=INK, fontsize=9)
+    ax.set_title("the signal that carries the inertia sits below the noise",
                  fontsize=10, color=INK, loc="left")
     ax.legend(fontsize=8, frameon=False)
     for a_ in axs:
@@ -291,12 +293,12 @@ def main(argv):
         for s in a_.spines.values():
             s.set_color(GRID)
     axs[1].grid(True, axis="y", color=GRID, lw=0.6)
-    fig.suptitle(f"Inercias a partir do voo — {name}", fontsize=11, color=INK,
+    fig.suptitle(f"Inertia from flight data — {name}", fontsize=11, color=INK,
                  x=0.01, ha="left")
     fig.tight_layout(rect=(0, 0, 1, 0.95))
-    out = os.path.join("out", f"inercia_{name}.png")
+    out = os.path.join("out", f"inertia_{name}.png")
     fig.savefig(out, dpi=130)
-    print(f"\nfigura: {out}")
+    print(f"\nfigure: {out}")
     return 0
 
 

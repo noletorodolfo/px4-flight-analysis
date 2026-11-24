@@ -1,7 +1,7 @@
-"""Atitude e taxas: desejado (setpoint) vs real, a partir de um log .ulg.
+"""Attitude and rates: commanded (setpoint) vs measured, from a .ulg log.
 
-Uso: python src/plot_attitude.py data/ulg/<id>/<id>.ulg [--t0 S] [--t1 S] [--hz 50]
-Salva PNG em out/ e imprime erro RMS por eixo.
+Usage: python src/plot_attitude.py data/ulg/<id>/<id>.ulg [--t0 S] [--t1 S] [--hz 50]
+Writes a PNG to out/ and prints the RMS error per axis.
 """
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import px4io  # noqa: E402
 
-C_SP = "#D1670B"   # setpoint (desejado)
-C_ACT = "#1F6FB2"  # real (medido/estimado)
+C_SP = "#D1670B"   # commanded setpoint
+C_ACT = "#1F6FB2"  # measured / estimated
 INK = "#1a1a1a"
 MUTED = "#6b6b6b"
 GRID = "#e3e3e0"
@@ -58,7 +58,7 @@ def main(argv):
     modes = px4io.mode_intervals(ulog)
     armed = px4io.armed_intervals(ulog)
 
-    # janela: por padrao, o periodo armado
+    # window: the armed period by default
     t0 = args.t0 if args.t0 is not None else (armed[0][0] if armed else df.index[0])
     t1 = args.t1 if args.t1 is not None else (armed[-1][1] if armed else df.index[-1])
     df = df.loc[(df.index >= t0) & (df.index <= t1)]
@@ -74,7 +74,7 @@ def main(argv):
 
     errs = {lbl: rms_err(df, sp, act, ang) * k for lbl, sp, act, k, ang in panels}
 
-    # yaw continuo para visualizacao (evita saltos em +-180 deg)
+    # unwrap yaw for display (avoids the jumps at +-180 deg)
     for c in ("act_yaw", "sp_yaw"):
         df[c] = np.unwrap(df[c].to_numpy())
 
@@ -82,8 +82,8 @@ def main(argv):
     fig.patch.set_facecolor("#fcfcfb")
     for ax, (lbl, sp, act, k, ang) in zip(axes, panels):
         ax.set_facecolor("#fcfcfb")
-        ax.plot(df.index, df[act] * k, color=C_ACT, lw=1.2, label="real")
-        ax.plot(df.index, df[sp] * k, color=C_SP, lw=1.2, ls="--", label="desejado")
+        ax.plot(df.index, df[act] * k, color=C_ACT, lw=1.2, label="measured")
+        ax.plot(df.index, df[sp] * k, color=C_SP, lw=1.2, ls="--", label="commanded")
         ax.set_ylabel(lbl, fontsize=9, color=INK)
         ax.grid(True, color=GRID, lw=0.6)
         for s in ax.spines.values():
@@ -93,7 +93,7 @@ def main(argv):
                 ha="right", va="bottom", fontsize=8, color=MUTED)
     axes[0].legend(loc="upper left", fontsize=8, frameon=False, ncol=2)
 
-    # fronteiras de modo de voo
+    # flight-mode boundaries
     for ax in axes:
         for a, b, name in modes:
             if b < t0 or a > t1:
@@ -110,19 +110,19 @@ def main(argv):
                      color=MUTED, va="top")
         last_name, last_x = name, x
 
-    axes[-1].set_xlabel("tempo [s desde o inicio do log]", fontsize=9, color=INK)
+    axes[-1].set_xlabel("time [s since log start]", fontsize=9, color=INK)
     name = os.path.basename(ulog_path).replace(".ulg", "")
-    fig.suptitle(f"Rastreamento de atitude — {name[:8]}  "
-                 f"({ulog.msg_info_dict.get('ver_hw','?')}, janela {t0:.0f}–{t1:.0f} s)",
+    fig.suptitle(f"Attitude tracking — {name[:8]}  "
+                 f"({ulog.msg_info_dict.get('ver_hw','?')}, window {t0:.0f}–{t1:.0f} s)",
                  fontsize=11, color=INK, x=0.01, ha="left")
     fig.tight_layout(rect=(0, 0, 1, 0.98))
 
     os.makedirs(args.out, exist_ok=True)
-    png = os.path.join(args.out, f"atitude_{name[:8]}.png")
+    png = os.path.join(args.out, f"attitude_{name[:8]}.png")
     fig.savefig(png, dpi=130)
-    print(f"figura: {png}")
-    print(f"janela: {t0:.1f}–{t1:.1f} s @ {args.hz:g} Hz ({len(df)} amostras)")
-    print("erro RMS (desejado - real):")
+    print(f"figure: {png}")
+    print(f"window: {t0:.1f}–{t1:.1f} s @ {args.hz:g} Hz ({len(df)} samples)")
+    print("RMS error (commanded - measured):")
     for lbl, v in errs.items():
         print(f"  {lbl:26} {v:8.2f}")
     return 0

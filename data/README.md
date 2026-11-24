@@ -22,4 +22,4 @@ curl -sSL -o data/ulg/<id>/<id>.ulg https://cdn.logs.px4.io/<id>.ulg
 The full public index is at `https://review.px4.io/dbinfo` (gzipped JSON, ~390 MB
 uncompressed, 493,010 flights). A further 39 logs were downloaded for the excitation
 sweep and the threshold calibration, then deleted; their measurements are kept in
-`out/excitacao_scan.txt` and `docs/fleet_percentiles.json`.
+`out/excitation_scan.txt` and `docs/fleet_percentiles.json`.

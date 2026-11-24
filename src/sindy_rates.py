@@ -1,15 +1,15 @@
-"""Identificacao esparsa (SINDy) da dinamica de taxas angulares a partir de um log PX4.
+"""Sparse identification (SINDy) of the angular-rate dynamics from a PX4 log.
 
-Modelo-alvo (corpo rigido + atuacao + arrasto aerodinamico):
+Target model (rigid body + actuation + aerodynamic drag):
     p_dot = (Iy-Iz)/Ix * q*r + (1/Ix) * tau_x - (Kp/Ix) * p + ...
     q_dot = (Iz-Ix)/Iy * p*r + (1/Iy) * tau_y - (Kq/Iy) * q + ...
     r_dot = (Ix-Iy)/Iz * p*q + (1/Iz) * tau_z - (Kr/Iz) * r + ...
 
-Os torques de comando tau_* sao reconstruidos a partir dos comandos de motor
-(`actuator_motors`) e da geometria real do veiculo gravada no log (parametros
-CA_ROTOR*_PX/PY/CT/KM), nao de um mixer presumido.
+The commanded torques tau_* are reconstructed from the motor commands
+(`actuator_motors`) and the vehicle geometry recorded in the log itself
+(CA_ROTOR*_PX/PY/CT/KM parameters), not from an assumed mixer.
 
-Uso:
+Usage:
   python src/sindy_rates.py data/ulg/<id>/<id>.ulg [--hz 50] [--modes Manual Acro]
                             [--t0 S --t1 S] [--fc 10] [--thresh 0.05]
 """
@@ -28,9 +28,9 @@ import px4io  # noqa: E402
 R2D = 180.0 / np.pi
 
 
-# ----------------------------------------------------------------- geometria
+# ------------------------------------------------------------------ geometry
 def rotor_geometry(ulog) -> dict:
-    """Le CA_ROTOR*_{PX,PY,CT,KM} do log. Retorna matriz de alocacao normalizada."""
+    """Read CA_ROTOR*_{PX,PY,CT,KM} from the log (the real allocation geometry)."""
     par = ulog.initial_parameters
     n = int(par.get("CA_ROTOR_COUNT", 0))
     g = {"n": n, "px": [], "py": [], "ct": [], "km": []}
@@ -41,20 +41,20 @@ def rotor_geometry(ulog) -> dict:
         g["km"].append(float(par.get(f"CA_ROTOR{i}_KM", 0.0)))
     for k in ("px", "py", "ct", "km"):
         g[k] = np.array(g[k])
-    # arm "unitario" (PX/PY = +-1) significa geometria nao calibrada no veiculo
+    # Unit arms (PX/PY = +-1) mean the geometry was never calibrated on the vehicle
     g["normalized_arms"] = bool(np.allclose(np.abs(g["px"]), 1.0) and
                                 np.allclose(np.abs(g["py"]), 1.0))
     return g
 
 
 def virtual_torques(u: np.ndarray, g: dict) -> np.ndarray:
-    """Comandos de motor (n_amostras x n_rotores) -> torques de comando [tx, ty, tz, T].
+    """Motor commands (n_samples x n_rotors) -> commanded torques [tx, ty, tz, T].
 
     F_i = CT_i * u_i * (0,0,-1);  tau_i = p_i x F_i + KM_i * CT_i * u_i * (0,0,-1)
       => tau_x = -CT * sum(py_i * u_i)
          tau_y = +CT * sum(px_i * u_i)
          tau_z = -CT * sum(km_i * u_i)
-         T     = +CT * sum(u_i)     (empuxo total, modulo sinal)
+         T     = +CT * sum(u_i)     (total thrust, up to sign)
     """
     ct, px, py, km = g["ct"], g["px"], g["py"], g["km"]
     tx = -(u * (ct * py)).sum(axis=1)
@@ -64,11 +64,12 @@ def virtual_torques(u: np.ndarray, g: dict) -> np.ndarray:
     return np.column_stack([tx, ty, tz, T])
 
 
-# -------------------------------------------------------------------- dados
+# --------------------------------------------------------------------- data
 def build_dataset(ulog, hz: float, fc: float, modes: list[str] | None,
                   t0: float | None, t1: float | None, source: str = "auto"):
-    """source: 'torque' = vehicle_torque_setpoint (comando normalizado, taxa do
-    laco de rate); 'motors' = actuator_motors reconstruido pela geometria CA_*."""
+    """source: 'torque' = vehicle_torque_setpoint (normalised command, logged at
+    the rate-loop frequency); 'motors' = actuator_motors reconstructed through the
+    CA_* geometry."""
     rate = px4io.to_df(ulog, "vehicle_angular_velocity")[["xyz[0]", "xyz[1]", "xyz[2]"]]
     rate.columns = ["p", "q", "r"]
     g = rotor_geometry(ulog)
@@ -90,7 +91,7 @@ def build_dataset(ulog, hz: float, fc: float, modes: list[str] | None,
         df = px4io.resample_join([rate, am], hz)
     g["source"] = source
 
-    # janela: armado, modos pedidos, recorte manual
+    # window: armed, requested modes, manual trim
     armed = px4io.armed_intervals(ulog)
     mask = np.zeros(len(df), dtype=bool)
     for a, b in armed:
@@ -106,29 +107,30 @@ def build_dataset(ulog, hz: float, fc: float, modes: list[str] | None,
     if t1 is not None:
         mask &= df.index <= t1
 
-    # filtra e deriva no sinal continuo, depois aplica a mascara (evita bordas falsas)
+    # filter and differentiate the continuous signal, then apply the mask, so the
+    # mask edges do not create artificial steps
     b, a = butter(4, fc / (hz / 2), btype="low")
     X = np.column_stack([filtfilt(b, a, df[c].to_numpy()) for c in ("p", "q", "r")])
-    win = max(5, int(round(0.1 * hz)) | 1)  # ~100 ms, impar
+    win = max(5, int(round(0.1 * hz)) | 1)  # ~100 ms, odd
     Xdot = np.column_stack([savgol_filter(X[:, i], win, 3, deriv=1, delta=1 / hz)
                             for i in range(3)])
     if g["source"] == "torque":
         U = df[ucols].to_numpy()
-        U[:, 3] = -U[:, 3]  # thrust_setpoint z e negativo (FRD); usa modulo
+        U[:, 3] = -U[:, 3]  # thrust_setpoint z is negative (FRD); use magnitude
     else:
         U = virtual_torques(df[ucols].to_numpy(), g)
     U = np.column_stack([filtfilt(b, a, U[:, i]) for i in range(U.shape[1])])
 
-    # descarta bordas do filtro e trechos nao selecionados
+    # drop filter edges and unselected segments
     edge = int(2 * hz)
     mask[:edge] = False
     mask[-edge:] = False
     return df.index.to_numpy()[mask], X[mask], Xdot[mask], U[mask], g
 
 
-# ---------------------------------------------------------------- biblioteca
+# ------------------------------------------------------------------- library
 def first_order_lag(u: np.ndarray, tau_s: float, hz: float) -> np.ndarray:
-    """Atraso de primeira ordem (dinamica de motor) aplicado a cada coluna."""
+    """First-order lag (motor dynamics) applied to every column."""
     if tau_s <= 0:
         return u.copy()
     a = float(np.exp(-1.0 / (tau_s * hz)))
@@ -148,18 +150,18 @@ def library(X, U):
         "q*r": q * r, "p*r": p * r, "p*q": p * q,
         "tau_x": tx, "tau_y": ty, "tau_z": tz, "T": T,
         "p|p|": p * np.abs(p), "q|q|": q * np.abs(q), "r|r|": r * np.abs(r),
-        # efetividade de controle cresce com o empuxo (rotor mais carregado)
+        # control effectiveness grows with thrust (a more loaded rotor)
         "tau_x*T": tx * T, "tau_y*T": ty * T, "tau_z*T": tz * T,
     }
     return np.column_stack(list(cols.values())), list(cols.keys())
 
 
 def stlsq(Theta, y, threshold, n_iter=20, relative=True):
-    """Sequential thresholded least squares com normalizacao de colunas.
+    """Sequential thresholded least squares with column normalisation.
 
-    Com relative=True o limiar e uma fracao do maior coeficiente normalizado,
-    ou seja, corta termos que contribuem menos que `threshold` vezes o termo
-    dominante — independe das unidades do eixo.
+    With relative=True the threshold is a fraction of the largest normalised
+    coefficient, i.e. it drops terms contributing less than `threshold` times the
+    dominant term — which makes it independent of the units of each axis.
     """
     s = np.linalg.norm(Theta, axis=0)
     s[s == 0] = 1.0
@@ -188,7 +190,7 @@ def r2(y, yhat):
 
 
 def block_split(t, block_s=10.0):
-    """Blocos alternados: pares = treino, impares = teste."""
+    """Alternating blocks: even = train, odd = test."""
     idx = ((t - t[0]) // block_s).astype(int)
     return idx % 2 == 0, idx % 2 == 1
 
@@ -197,18 +199,18 @@ def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("ulg")
     ap.add_argument("--hz", type=float, default=50.0)
-    ap.add_argument("--fc", type=float, default=None, help="corte do passa-baixa [Hz]")
+    ap.add_argument("--fc", type=float, default=None, help="low-pass cutoff [Hz]")
     ap.add_argument("--modes", nargs="*", default=None)
     ap.add_argument("--t0", type=float, default=None)
     ap.add_argument("--t1", type=float, default=None)
     ap.add_argument("--thresh", type=float, default=None,
-                    help="limiar relativo do STLSQ (fracao do termo dominante)")
+                    help="relative STLSQ threshold (fraction of the dominant term)")
     ap.add_argument("--input", choices=["auto", "torque", "motors"], default="auto",
-                    help="origem do comando: torque setpoint ou comandos de motor")
+                    help="command source: torque setpoint or motor commands")
     ap.add_argument("--lag", type=float, default=None,
-                    help="constante de tempo do atuador [s]; omitido = varre")
+                    help="actuator time constant [s]; omitted = sweep")
     ap.add_argument("--cross-check", action="store_true",
-                    help="confere os coeficientes contra o STLSQ do pysindy")
+                    help="cross-check the coefficients against pysindy.STLSQ")
     args = ap.parse_args(argv)
 
     fc = args.fc if args.fc else min(15.0, 0.2 * args.hz)
@@ -220,23 +222,23 @@ def main(argv):
     name = os.path.basename(args.ulg)[:8]
 
     print("=" * 76)
-    print(f"SINDy — taxas angulares — {name} ({ulog.msg_info_dict.get('ver_hw','?')})")
-    print(f"entrada = {g['source']}"
-          + ("  (vehicle_torque_setpoint, normalizado -1..1, na taxa do laco de rate)"
+    print(f"SINDy — angular rates — {name} ({ulog.msg_info_dict.get('ver_hw','?')})")
+    print(f"input = {g['source']}"
+          + ("  (vehicle_torque_setpoint, normalised -1..1, at rate-loop frequency)"
              if g["source"] == "torque" else
-             "  (actuator_motors + geometria CA_ROTOR*)"))
-    print(f"rotores={g['n']}  CT={g['ct'][0]:.3g}  KM=±{abs(g['km'][0]):.3g}  "
-          f"bracos {'NORMALIZADOS (+-1, geometria nao calibrada)' if g['normalized_arms'] else 'em metros'}")
-    print(f"grade {args.hz:g} Hz, passa-baixa {fc:g} Hz, {len(t)} amostras "
-          f"({len(t)/args.hz:.0f} s uteis)"
-          + (f", modos={args.modes}" if args.modes else ""))
-    print(f"excitacao: std(p,q,r) = "
+             "  (actuator_motors + CA_ROTOR* geometry)"))
+    print(f"rotors={g['n']}  CT={g['ct'][0]:.3g}  KM=±{abs(g['km'][0]):.3g}  "
+          f"arms {'NORMALISED (+-1, geometry not calibrated)' if g['normalized_arms'] else 'in metres'}")
+    print(f"grid {args.hz:g} Hz, low-pass {fc:g} Hz, {len(t)} samples "
+          f"({len(t)/args.hz:.0f} s usable)"
+          + (f", modes={args.modes}" if args.modes else ""))
+    print(f"excitation: std(p,q,r) = "
           f"{np.std(X[:,0])*R2D:.1f}, {np.std(X[:,1])*R2D:.1f}, {np.std(X[:,2])*R2D:.1f} deg/s")
 
     tr, te = block_split(t)
-    print(f"treino {tr.sum()} / teste {te.sum()} amostras (blocos alternados de 10 s)")
+    print(f"train {tr.sum()} / test {te.sum()} samples (alternating 10 s blocks)")
 
-    # varredura da constante de tempo do atuador (motor + ESC)
+    # sweep of the actuator time constant (motor + ESC)
     lags = [0.0] if args.lag is not None else [0.0, 0.02, 0.04, 0.06, 0.08, 0.12, 0.2]
     if args.lag is not None:
         lags = [args.lag]
@@ -252,9 +254,9 @@ def main(argv):
         if tot > best_sum:
             best_sum, best_lag = tot, L
     if len(lags) > 1:
-        print("atraso do atuador (s -> R2 medio): " +
+        print("actuator lag (s -> mean R2): " +
               "  ".join(f"{L:g}->{scores[L]:.3f}" for L in lags))
-    print(f"atraso adotado: {best_lag*1000:.0f} ms")
+    print(f"lag adopted: {best_lag*1000:.0f} ms")
     U = first_order_lag(U, best_lag, args.hz)
     Theta, names = library(X, U)
 
@@ -269,40 +271,40 @@ def main(argv):
             xi, abs_th = stlsq(Theta[tr], y[tr], th)
             sc = r2(y[te], Theta[te] @ xi)
             cand.append((sc, th, xi, int(np.sum(np.abs(xi) > 0)), abs_th))
-        # parcimonia: menos termos entre os que ficam a <=3% do melhor R2
+        # parsimony: fewest terms among models within 3% of the best R2
         best_r2 = max(c[0] for c in cand)
         ok = [c for c in cand if c[0] >= best_r2 - 0.03 * abs(best_r2)]
         sc, th, xi, nterm, abs_th = min(ok, key=lambda c: (c[3], -c[0]))
         results[ax_name] = (xi, names, sc, th, abs_th)
         if len(thresholds) > 1:
-            print("    varredura (limiar -> termos, R2 teste): " +
+            print("    sweep (threshold -> terms, test R2): " +
                   "  ".join(f"{c[1]:g}->{c[3]}/{c[0]:.3f}" for c in cand))
-        print(f"\n--- {ax_name}   R2(teste) = {sc:.3f}   limiar = {th:g}   "
-              f"termos = {int(np.sum(np.abs(xi) > 0))}")
-        print(f"    R2(treino) = {r2(y[tr], Theta[tr] @ xi):.3f}   "
-              f"RMS residuo = {np.std(y - Theta @ xi)*R2D:.1f} deg/s^2")
+        print(f"\n--- {ax_name}   test R2 = {sc:.3f}   threshold = {th:g}   "
+              f"terms = {int(np.sum(np.abs(xi) > 0))}")
+        print(f"    train R2 = {r2(y[tr], Theta[tr] @ xi):.3f}   "
+              f"residual RMS = {np.std(y - Theta @ xi)*R2D:.1f} deg/s^2")
         order = np.argsort(-np.abs(xi * np.std(Theta, axis=0)))
         for i in order:
             if xi[i] == 0:
                 continue
             contrib = np.std(Theta[:, i] * xi[i]) * R2D
             print(f"      {names[i]:>8}  coef = {xi[i]:+12.4g}   "
-                  f"contribuicao std = {contrib:7.1f} deg/s^2")
+                  f"std contribution = {contrib:7.1f} deg/s^2")
 
     if args.cross_check:
         import pysindy as ps
-        print("\n--- conferencia com pysindy.STLSQ (mesma biblioteca, mesmo limiar)")
+        print("\n--- cross-check against pysindy.STLSQ (same library, same threshold)")
         for k, ax_name in enumerate(axes):
             xi, _, _, th, abs_th = results[ax_name]
             opt = ps.STLSQ(threshold=abs_th, normalize_columns=True, alpha=0.0)
             opt.fit(Theta[tr], Xdot[tr, k])
             xp = opt.coef_.ravel()
             d = np.max(np.abs(xp - xi)) / max(np.max(np.abs(xi)), 1e-12)
-            print(f"    {ax_name}: diferenca relativa max = {d:.2e} "
-                  f"({'igual' if d < 1e-6 else 'DIVERGE'})")
+            print(f"    {ax_name}: max relative difference = {d:.2e} "
+                  f"({'identical' if d < 1e-6 else 'DIVERGES'})")
 
-    # ------------------------------------------------- interpretacao fisica
-    print("\n--- leitura fisica (corpo rigido)")
+    # ------------------------------------------------ physical interpretation
+    print("\n--- physical reading (rigid body)")
     gyro_terms = {"p_dot": "q*r", "q_dot": "p*r", "r_dot": "p*q"}
     ratio_name = {"p_dot": "(Iy-Iz)/Ix", "q_dot": "(Iz-Ix)/Iy", "r_dot": "(Ix-Iy)/Iz"}
     tau_term = {"p_dot": "tau_x", "q_dot": "tau_y", "r_dot": "tau_z"}
@@ -312,14 +314,17 @@ def main(argv):
         d = dict(zip(nm, xi))
         gy, ta, dp = gyro_terms[ax_name], tau_term[ax_name], damp[ax_name]
         print(f"  {ax_name}:")
-        print(f"    {ratio_name[ax_name]:>12} ~ {d.get(gy,0.0):+9.4g}  (coef de {gy})")
+        print(f"    {ratio_name[ax_name]:>12} ~ {d.get(gy,0.0):+9.4g}  "
+              f"(coefficient of {gy})")
         if d.get(ta, 0.0) != 0:
-            print(f"    ganho de controle (1/I)*dtau: {d[ta]:+9.4g} rad/s^2 por unidade de {ta}")
+            print(f"    control gain (1/I)*dtau: {d[ta]:+9.4g} rad/s^2 per unit "
+                  f"of {ta}")
         if d.get(dp, 0.0) != 0:
             tau_c = -1.0 / d[dp] if d[dp] < 0 else np.nan
-            print(f"    amortecimento: {d[dp]:+9.4g} 1/s"
-                  + (f"  -> constante de tempo {tau_c:.2f} s" if np.isfinite(tau_c) else
-                     "  (POSITIVO: instavel/nao fisico, provavel acoplamento com o controlador)"))
+            print(f"    damping: {d[dp]:+9.4g} 1/s"
+                  + (f"  -> time constant {tau_c:.2f} s" if np.isfinite(tau_c) else
+                     "  (POSITIVE: unstable / non-physical, likely coupling with "
+                     "the controller)"))
     print()
     np.save(os.path.join("out", f"sindy_{name}.npy"),
             {"names": names, "coefs": {k: v[0] for k, v in results.items()},

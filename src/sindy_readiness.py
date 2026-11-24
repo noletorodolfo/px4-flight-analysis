@@ -1,13 +1,14 @@
-"""Checa se um log serve para identificacao de dinamica (SINDy) nos eixos de atitude.
+"""Check whether a log can support dynamics identification (SINDy) on the
+attitude axes.
 
-Criterios avaliados:
-  1. taxa de amostragem efetiva dos sinais necessarios (p,q,r e entradas);
-  2. banda do sinal (f95) vs Nyquist da taxa logada -> risco de aliasing;
-  3. excitacao: desvio padrao e fracao do tempo em manobra;
-  4. ruido na derivada numerica (SINDy precisa de dx/dt);
-  5. condicionamento de uma biblioteca polinomial candidata.
+Criteria:
+  1. effective sampling rate of the required signals (p, q, r and inputs);
+  2. signal bandwidth (f95) vs the Nyquist of the logged rate -> aliasing risk;
+  3. excitation: standard deviation and fraction of time manoeuvring;
+  4. noise in the numerical derivative (SINDy needs dx/dt);
+  5. conditioning of a candidate polynomial library.
 
-Uso: python src/sindy_readiness.py data/ulg/<id>/<id>.ulg [--hz 100]
+Usage: python src/sindy_readiness.py data/ulg/<id>/<id>.ulg [--hz 100]
 """
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ R2D = 180.0 / np.pi
 
 
 def f95(x: np.ndarray, fs: float) -> float:
-    """Frequencia abaixo da qual esta 95% da energia (sem a componente DC)."""
+    """Frequency below which 95% of the energy sits (DC component removed)."""
     x = x - np.mean(x)
     n = len(x)
     f = np.fft.rfftfreq(n, 1 / fs)
@@ -48,7 +49,7 @@ def effective_hz(ulog, topic, multi_id=0):
 def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("ulg")
-    ap.add_argument("--hz", type=float, default=100.0, help="grade de reamostragem")
+    ap.add_argument("--hz", type=float, default=100.0, help="resampling grid")
     args = ap.parse_args(argv)
 
     topics = ["vehicle_angular_velocity", "vehicle_attitude", "vehicle_attitude_setpoint",
@@ -61,14 +62,14 @@ def main(argv):
     print("=" * 74)
     print(f"SINDy readiness — {name}  ({ulog.msg_info_dict.get('ver_hw','?')})")
 
-    print("\n1) taxas logadas (Hz: mediana / media)")
+    print("\n1) logged rates (Hz: median / mean)")
     for t in ["vehicle_angular_velocity", "vehicle_attitude", "actuator_motors",
               "actuator_outputs", "vehicle_rates_setpoint"]:
         if t in present:
             n, hm, ha = effective_hz(ulog, t)
             print(f"   {t:28} n={n:7}  {hm:7.1f} / {ha:7.1f}")
         else:
-            print(f"   {t:28} AUSENTE")
+            print(f"   {t:28} MISSING")
 
     rate = px4io.to_df(ulog, "vehicle_angular_velocity")[["xyz[0]", "xyz[1]", "xyz[2]"]]
     rate.columns = ["p", "q", "r"]
@@ -79,7 +80,7 @@ def main(argv):
     ucols = [c for c in u.columns if c.startswith(("control[", "output["))][:8]
     if ucols:
         u = u[ucols]
-        # actuator_outputs vem em PWM (us); normaliza grosseiramente para [0,1]
+        # actuator_outputs comes in PWM (us); roughly normalise to [0,1]
         if u_topic == "actuator_outputs" and np.nanmax(u.to_numpy()) > 10:
             u = (u - 1000.0) / 1000.0
         frames.append(u)
@@ -92,49 +93,52 @@ def main(argv):
     fs = args.hz
     p, q, r = (df[c].to_numpy() for c in ("p", "q", "r"))
 
-    print(f"\n2) banda do sinal (f95) vs Nyquist (janela armada, {len(df)} amostras @ {fs:g} Hz)")
+    print(f"\n2) signal bandwidth (f95) vs Nyquist (armed window, {len(df)} "
+          f"samples @ {fs:g} Hz)")
     nyq_log = effective_hz(ulog, "vehicle_angular_velocity")[1] / 2
     for lbl, x in (("p", p), ("q", q), ("r", r)):
         f = f95(x, fs)
-        print(f"   {lbl}: f95 = {f:6.2f} Hz   (Nyquist do log = {nyq_log:.0f} Hz)"
-              f"{'   <- risco de aliasing' if f > 0.8 * min(nyq_log, fs/2) else ''}")
+        print(f"   {lbl}: f95 = {f:6.2f} Hz   (log Nyquist = {nyq_log:.0f} Hz)"
+              f"{'   <- aliasing risk' if f > 0.8 * min(nyq_log, fs/2) else ''}")
 
-    print("\n3) excitacao")
+    print("\n3) excitation")
     for lbl, x in (("p", p), ("q", q), ("r", r)):
         xd = x * R2D
         frac = float(np.mean(np.abs(xd) > 20))
         print(f"   {lbl}: std = {np.std(xd):7.2f} deg/s   max = {np.max(np.abs(xd)):7.1f}"
-              f"   tempo com |{lbl}|>20 deg/s = {100*frac:5.1f}%")
+              f"   time with |{lbl}|>20 deg/s = {100*frac:5.1f}%")
     for lbl in ("a_roll", "a_pitch"):
         x = df[lbl].to_numpy() * R2D
         print(f"   {lbl}: std = {np.std(x):7.2f} deg   max|.| = {np.max(np.abs(x)):7.1f} deg")
 
-    print("\n4) ruido na derivada (dp/dt por diferencas centrais)")
+    print("\n4) derivative noise (dp/dt by central differences)")
     for lbl, x in (("p", p), ("q", q), ("r", r)):
         d1 = np.gradient(x, 1 / fs)
-        # razao entre energia acima de 20 Hz e total, na derivada
+        # share of the derivative energy that sits above 20 Hz
         n = len(d1)
         f = np.fft.rfftfreq(n, 1 / fs)
         P = np.abs(np.fft.rfft((d1 - d1.mean()) * np.hanning(n))) ** 2
         hf = float(P[f > 20].sum() / P.sum()) if P.sum() > 0 else np.nan
-        print(f"   d{lbl}/dt: std = {np.std(d1)*R2D:8.1f} deg/s^2   energia >20 Hz = {100*hf:5.1f}%")
+        print(f"   d{lbl}/dt: std = {np.std(d1)*R2D:8.1f} deg/s^2   "
+              f"energy >20 Hz = {100*hf:5.1f}%")
 
-    print("\n5) condicionamento da biblioteca candidata (polinomios grau 2 em p,q,r,u)")
+    print("\n5) conditioning of the candidate library (degree-2 polynomials in "
+          "p, q, r, u)")
     base, names = [p, q, r], ["p", "q", "r"]
-    descartadas = []
+    dropped = []
     for c in ucols:
         x = df[c].to_numpy(dtype=float)
         if not np.all(np.isfinite(x)):
-            descartadas.append(f"{c} (NaN/inf)")
+            dropped.append(f"{c} (NaN/inf)")
             continue
         if np.std(x) < 1e-6:
-            descartadas.append(f"{c} (constante)")
+            dropped.append(f"{c} (constant)")
             continue
         base.append(x)
         names.append(c)
-    if descartadas:
-        print("   entradas descartadas:", ", ".join(descartadas))
-    print(f"   entradas usadas: {', '.join(names[3:]) or '(nenhuma)'}")
+    if dropped:
+        print("   inputs discarded:", ", ".join(dropped))
+    print(f"   inputs used: {', '.join(names[3:]) or '(none)'}")
     cols, cnames = [np.ones_like(p)], ["1"]
     for i, a in enumerate(base):
         cols.append(a); cnames.append(names[i])
@@ -150,9 +154,10 @@ def main(argv):
     s = np.linalg.svd(Ts, compute_uv=False, full_matrices=False)
     cond = s[0] / s[-1] if s[-1] > 0 else np.inf
     rank = int(np.sum(s > s[0] * 1e-10))
-    print(f"   termos = {Theta.shape[1]}   posto numerico = {rank}   "
-          f"cond(Theta normalizada) = {cond:.3e}")
-    print(f"   {'OK (<1e3)' if cond < 1e3 else 'alto: termos quase colineares, esperar coeficientes instaveis'}")
+    print(f"   terms = {Theta.shape[1]}   numerical rank = {rank}   "
+          f"cond(normalised Theta) = {cond:.3e}")
+    print(f"   {'OK (<1e3)' if cond < 1e3 else 'high: nearly collinear terms, expect '
+          'unstable coefficients'}")
     print()
     return 0
 

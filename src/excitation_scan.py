@@ -1,13 +1,13 @@
-"""Varre logs .ulg e ranqueia pela excitacao dos termos giroscopicos.
+"""Scan .ulg logs and rank them by gyroscopic excitation.
 
-Para identificar inercia a partir de voo, o que precisa aparecer sao os produtos
-q*r, p*r e p*q (termos de Euler). Este script mede quanto deles existe em cada
-log, para responder: "existe algum voo publico com excitacao suficiente?"
+To identify inertia from flight data, what has to show up are the Euler products
+q*r, p*r and p*q. This script measures how much of them each log contains, to
+answer: "is there any public flight with enough excitation?"
 
-Referencia: no log 22e75c8c seria necessario std(q*r) ~ 15 rad^2/s^2 para o termo
-giroscopico ficar 3x acima do residuo do modelo.
+Reference: on log 22e75c8c, std(q*r) would have to reach ~15 rad^2/s^2 for the
+gyroscopic term to sit 3x above the model residual.
 
-Uso: python src/excitation_scan.py data/ulg/*/*.ulg [--target 15]
+Usage: python src/excitation_scan.py data/ulg/*/*.ulg [--target 15]
 """
 from __future__ import annotations
 
@@ -32,8 +32,8 @@ def scan(path: str, mode_filter: list[str] | None = None) -> dict | None:
         u = px4io.load(path, ["vehicle_angular_velocity", "vehicle_status",
                               "actuator_motors"])
         d = px4io.to_df(u, "vehicle_angular_velocity")
-    except Exception as e:                                    # log truncado etc.
-        return {"id": os.path.basename(path)[:8], "erro": str(e)[:40]}
+    except Exception as e:                                    # truncated log, etc.
+        return {"id": os.path.basename(path)[:8], "error": str(e)[:40]}
     p = d["xyz[0]"].to_numpy(); q = d["xyz[1]"].to_numpy(); r = d["xyz[2]"].to_numpy()
     t = d.index.to_numpy()
 
@@ -55,8 +55,8 @@ def scan(path: str, mode_filter: list[str] | None = None) -> dict | None:
     if len(p) < 100:
         return None
 
-    # saturacao do alocador: com motor no piso/teto o torque comandado nao e
-    # entregue, entao a entrada do modelo passa a ser ficticia
+    # Allocator saturation: with a motor on the floor or ceiling the commanded
+    # torque is not delivered, so the model input becomes fiction.
     sat = np.nan
     try:
         am = px4io.to_df(u, "actuator_motors")
@@ -80,7 +80,7 @@ def scan(path: str, mode_filter: list[str] | None = None) -> dict | None:
         pass
 
     qr, pr, pq = q * r, p * r, p * q
-    both = np.mean((np.abs(q) > 1.75) & (np.abs(r) > 1.75))   # ~100 deg/s nos dois
+    both = np.mean((np.abs(q) > 1.75) & (np.abs(r) > 1.75))   # ~100 deg/s on both
     return {
         "id": os.path.basename(path)[:8],
         "dur": float(t[-1] - t[0]),
@@ -91,8 +91,8 @@ def scan(path: str, mode_filter: list[str] | None = None) -> dict | None:
         "max_r": float(np.max(np.abs(r))) * R2D,
         "qr": float(np.std(qr)), "pr": float(np.std(pr)), "pq": float(np.std(pq)),
         "qr_max": float(np.max(np.abs(qr))),
-        "acopl": 100 * float(both), "sat": sat,
-        "modos": sorted({nm for _, _, nm in modes}),
+        "coupling": 100 * float(both), "sat": sat,
+        "modes": sorted({nm for _, _, nm in modes}),
     }
 
 
@@ -100,9 +100,10 @@ def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("ulgs", nargs="+")
     ap.add_argument("--target", type=float, default=15.0,
-                    help="std(q*r) necessario [rad^2/s^2]")
+                    help="required std(q*r) [rad^2/s^2]")
     ap.add_argument("--modes", nargs="*", default=None)
-    ap.add_argument("--plot", default=None, help="salva dispersao excitacao x saturacao")
+    ap.add_argument("--plot", default=None,
+                    help="save the excitation vs saturation scatter here")
     args = ap.parse_args(argv)
 
     paths = []
@@ -114,31 +115,31 @@ def main(argv):
         rec = scan(pth, args.modes)
         if rec is None:
             continue
-        if "erro" in rec:
-            print(f"  {rec['id']}: erro ao ler ({rec['erro']})")
+        if "error" in rec:
+            print(f"  {rec['id']}: could not read ({rec['error']})")
             continue
         rows.append(rec)
     rows.sort(key=lambda r: -r["qr"])
 
-    print(f"\nalvo: std(q*r) >= {args.target:g} rad^2/s^2"
-          + (f"   (so modos {args.modes})" if args.modes else "   (todo o voo armado)"))
+    print(f"\ntarget: std(q*r) >= {args.target:g} rad^2/s^2"
+          + (f"   (modes {args.modes} only)" if args.modes else "   (whole armed flight)"))
     print("-" * 104)
     print(f"{'log':9} {'hw':16} {'dur':>6} {'std p':>7} {'std r':>7} "
-          f"{'std qr':>7} {'std pr':>7} {'std pq':>7} {'max qr':>7} {'acopl%':>7} {'sat%':>6} {'alvo':>6}")
+          f"{'std qr':>7} {'std pr':>7} {'std pq':>7} {'max qr':>7} {'coupl%':>7} {'sat%':>6} {'target':>7}")
     print("-" * 104)
     for r in rows:
         frac = r["qr"] / args.target
         print(f"{r['id']:9} {r['hw']:16} {r['dur']:6.0f} {r['std_p']:7.1f} {r['std_r']:7.1f} "
               f"{r['qr']:7.3f} {r['pr']:7.3f} {r['pq']:7.3f} {r['qr_max']:7.2f} "
-              f"{r['acopl']:7.2f} {r['sat']:6.1f} {frac:6.2f}x")
+              f"{r['coupling']:7.2f} {r['sat']:6.1f} {frac:6.2f}x")
     print("-" * 104)
-    print("std p/r em deg/s; produtos em rad^2/s^2; acopl% = tempo com |q| e |r| "
-          "acima de 100 deg/s ao mesmo tempo;")
-    print("sat% = tempo com algum motor no piso (<=0.02) ou no teto (>=0.95): "
-          "com saturacao o torque comandado nao e entregue")
-    usavel = [r for r in rows if r["qr"] >= 0.3 * args.target and r["sat"] < 30]
-    print(f"\nlogs no canto util (excitacao >= 30% do alvo E saturacao < 30%): "
-          f"{len(usavel)}")
+    print("std p/r in deg/s; products in rad^2/s^2; coupl% = time with |q| and "
+          "|r| both above 100 deg/s;")
+    print("sat% = time with some motor on the floor (<=0.02) or ceiling (>=0.95): "
+          "under saturation the commanded torque is not delivered")
+    usable = [r for r in rows if r["qr"] >= 0.3 * args.target and r["sat"] < 30]
+    print(f"\nlogs in the useful corner (excitation >= 30% of target AND "
+          f"saturation < 30%): {len(usable)}")
     if args.plot:
         fig, ax = plt.subplots(figsize=(8.5, 6))
         fig.patch.set_facecolor("#fcfcfb"); ax.set_facecolor("#fcfcfb")
@@ -152,25 +153,26 @@ def main(argv):
                 ax.annotate(r["id"], (x, y), fontsize=7, color="#6b6b6b",
                             xytext=(4, 4), textcoords="offset points")
         ax.axvline(args.target, color="#D1670B", lw=1.2)
-        ax.annotate(f"alvo {args.target:g}", (args.target, 92), color="#D1670B",
+        ax.annotate(f"target {args.target:g}", (args.target, 92), color="#D1670B",
                     fontsize=8, rotation=90, va="top", ha="right")
         ax.set_xscale("log")
-        ax.set_xlabel("excitacao giroscopica — std(q·r) [rad²/s²]", fontsize=9)
-        ax.set_ylabel("saturacao do alocador [% do tempo armado]", fontsize=9)
-        ax.set_title("nenhum log publico fica no canto util "
-                     "(muita excitacao E pouca saturacao)", fontsize=10, loc="left")
+        ax.set_xlabel("gyroscopic excitation — std(q·r) [rad²/s²]", fontsize=9)
+        ax.set_ylabel("allocator saturation [% of armed time]", fontsize=9)
+        ax.set_title("no public log sits in the useful corner "
+                     "(high excitation AND low saturation)", fontsize=10, loc="left")
         ax.grid(True, color="#e3e3e0", lw=0.6)
         ax.tick_params(colors="#6b6b6b", labelsize=8)
         for sp in ax.spines.values():
             sp.set_color("#e3e3e0")
         fig.tight_layout()
         fig.savefig(args.plot, dpi=130)
-        print(f"figura: {args.plot}")
+        print(f"figure: {args.plot}")
 
     best = rows[0] if rows else None
     if best:
-        print(f"\nmelhor: {best['id']} com std(q*r) = {best['qr']:.3f} "
-              f"({best['qr']/args.target:.2f}x do alvo) — modos: {', '.join(best['modos'])}")
+        print(f"\nbest: {best['id']} with std(q*r) = {best['qr']:.3f} "
+              f"({best['qr']/args.target:.2f}x the target) — modes: "
+              f"{', '.join(best['modes'])}")
     return 0
 
 

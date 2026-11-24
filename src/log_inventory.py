@@ -1,6 +1,6 @@
-"""Inventario de um log .ulg do PX4: topicos, frequencias e qualidade dos dados.
+"""Inventory of a PX4 .ulg log: topics, rates and data quality.
 
-Uso: python src/log_inventory.py data/ulg/<id>/<id>.ulg [--min-hz 10]
+Usage: python src/log_inventory.py data/ulg/<id>/<id>.ulg [--min-hz 10]
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import numpy as np
 from pyulog import ULog
 
-# Topicos que interessam para rastreamento de atitude, vibracao, EKF e SINDy
+# Topics that matter for attitude tracking, vibration, EKF health and SINDy
 TOPICS_OF_INTEREST = [
     "vehicle_attitude",
     "vehicle_attitude_setpoint",
@@ -83,26 +83,26 @@ def header(ulog: ULog, path: str) -> None:
     end = ulog.last_timestamp * 1e-6
     print("=" * 78)
     print(f"LOG: {path}")
-    print(f"duracao: {end - start:.1f} s   ({(end-start)/60:.1f} min)")
+    print(f"duration: {end - start:.1f} s   ({(end-start)/60:.1f} min)")
     keys = ["sys_name", "ver_sw_release", "ver_hw", "sys_autostart", "sys_mc_est_group",
             "ver_sw", "time_ref_utc"]
     info = {k: v for k, v in ulog.msg_info_dict.items() if k in keys or k.startswith("ver_")}
     for k, v in sorted(info.items()):
         print(f"  {k}: {v}")
     nd, sd = dropouts(ulog)
-    print(f"  dropouts: {nd} ({sd:.3f} s perdidos)")
-    print(f"  topicos gravados: {len(ulog.data_list)}")
+    print(f"  dropouts: {nd} ({sd:.3f} s lost)")
+    print(f"  topics recorded: {len(ulog.data_list)}")
 
 
 def print_table(stats: list[TopicStat], only: set[str] | None, min_hz: float) -> None:
     rows = [s for s in stats if (only is None or s.name in only)]
     print("-" * 78)
-    print(f"{'topico':38} {'id':>2} {'n':>8} {'Hz':>7} {'jit%':>6} {'gap_s':>7}")
+    print(f"{'topic':38} {'id':>2} {'n':>8} {'Hz':>7} {'jit%':>6} {'gap_s':>7}")
     print("-" * 78)
     for s in rows:
         flag = ""
         if not np.isnan(s.hz_median) and s.hz_median < min_hz:
-            flag = "  <- baixa taxa"
+            flag = "  <- low rate"
         if not np.isnan(s.gap_max) and s.gap_max > 1.0:
             flag += "  <- gap >1s"
         print(f"{s.name[:38]:38} {s.multi_id:>2} {s.n:>8} {s.hz_median:>7.1f} "
@@ -113,7 +113,7 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("ulg")
     ap.add_argument("--min-hz", type=float, default=10.0)
-    ap.add_argument("--all", action="store_true", help="lista todos os topicos")
+    ap.add_argument("--all", action="store_true", help="list every topic")
     args = ap.parse_args(argv)
 
     ulog = ULog(args.ulg)
@@ -121,14 +121,14 @@ def main(argv: list[str]) -> int:
     stats = topic_stats(ulog)
 
     present = {s.name for s in stats}
-    print("\n### Topicos de interesse")
+    print("\n### Topics of interest")
     print_table(stats, set(TOPICS_OF_INTEREST), args.min_hz)
     missing = [t for t in TOPICS_OF_INTEREST if t not in present]
     if missing:
-        print("\nausentes:", ", ".join(missing))
+        print("\nmissing:", ", ".join(missing))
 
     if args.all:
-        print("\n### Todos os topicos")
+        print("\n### All topics")
         print_table(stats, None, args.min_hz)
     return 0
 

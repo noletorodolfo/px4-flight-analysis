@@ -1,25 +1,27 @@
-"""Identificacao no dominio da frequencia, com coerencia.
+"""Frequency-domain identification, with coherence.
 
-Por que: derivar no tempo amplifica ruido; na frequencia derivar e multiplicar
-por jw, entao a resposta em frequencia sai direto dos espectros cruzados. E,
-principalmente, a **coerencia** diz em que faixa o dado e confiavel — algo que
-nenhuma metrica do dominio do tempo entrega.
+Why: differentiating in the time domain amplifies noise. In the frequency domain
+differentiation is a multiplication by jw, so the frequency response comes
+straight out of the cross-spectra. More importantly, **coherence** tells you in
+which band the data can be trusted — something no time-domain metric provides.
 
-Para cada eixo estima-se  H(f) = Pxy / Pxx  entre o torque comandado e a taxa
-angular, com coerencia  gamma^2 = |Pxy|^2 / (Pxx * Pyy).
+For each axis it estimates  H(f) = Pxy / Pxx  between commanded torque and
+angular rate, with coherence  gamma^2 = |Pxy|^2 / (Pxx * Pyy).
 
-Depois ajusta-se, so onde a coerencia passa do limiar, o modelo de 1a ordem
+It then fits, only where coherence passes the threshold, the first-order model
 
     H(jw) = K / (jw + a)
 
-cuja forma no tempo e  w_dot = K*tau - a*w:  K e a efetividade de controle e
-`a` e o amortecimento. O ajuste e linear em (a, K):
+whose time-domain form is  w_dot = K*tau - a*w:  K is control effectiveness and
+`a` is damping. The fit is linear in (a, K):
 
     jw * H(jw)  =  K - a * H(jw)
 
-Isso da uma estimativa do amortecimento **independente** da regressao no tempo.
+which gives a damping estimate **independent** of the time-domain regression.
+A pure delay is swept on top, and `compare_structures` checks whether a free
+pole is the right model at all — for a small multirotor it usually is not.
 
-Uso: python src/freq_id.py data/ulg/<id>/<id>.ulg [--modes Manual] [--coer 0.6]
+Usage: python src/freq_id.py data/ulg/<id>/<id>.ulg [--modes Manual] [--coh 0.6]
 """
 from __future__ import annotations
 
@@ -41,8 +43,8 @@ C_A, C_B = "#1F6FB2", "#D1670B"
 INK, MUTED, GRID, BG = "#1a1a1a", "#6b6b6b", "#e3e3e0", "#fcfcfb"
 
 
-def ajusta_primeira_ordem(f, H, w8):
-    """Minimos quadrados complexos de jw*H = K - a*H, ponderado pela coerencia."""
+def fit_first_order(f, H, w8):
+    """Complex least squares of jw*H = K - a*H, weighted by coherence."""
     w = 2 * np.pi * f
     y = 1j * w * H
     A = np.column_stack([-H, np.ones_like(H)])          # [a, K]
@@ -57,55 +59,55 @@ def ajusta_primeira_ordem(f, H, w8):
     return a, K, float(1 - num / den) if den > 0 else np.nan, Hfit
 
 
-def compara_estruturas(fb, Hb, wb):
-    """Compara estruturas candidatas para a planta torque -> taxa.
+def compare_structures(fb, Hb, wb):
+    """Compare candidate structures for the torque -> rate plant.
 
-    O multirrotor nu e, em primeira aproximacao, um INTEGRADOR (torque -> taxa)
-    com atraso de atuador; amortecimento aerodinamico so aparece se for grande o
-    bastante. Ajustar 1a ordem com polo livre forca um polo onde talvez nao haja
-    — e foi assim que apareceu amortecimento negativo.
+    A bare multirotor is, to first order, an INTEGRATOR (torque to rate) with an
+    actuator delay; aerodynamic damping only shows up if it is large enough.
+    Fitting a first-order model with a free pole forces a pole where there may be
+    none — and that is how negative (non-physical) damping appears.
     """
     s_ = 1j * 2 * np.pi * fb
 
-    def ganho_otimo(base):
+    def best_gain(base):
         K = np.real(np.sum(wb * np.conj(base) * Hb) / np.sum(wb * np.abs(base) ** 2))
         num = np.sum(wb * np.abs(Hb - K * base) ** 2)
         den = np.sum(wb * np.abs(Hb - np.mean(Hb)) ** 2)
         return K, float(1 - num / den)
 
-    saida = []
-    melhor = None
+    out = []
+    best = None
     for td in np.arange(0.0, 0.201, 0.005):
-        a_, K_, r_, _ = ajusta_primeira_ordem(fb, Hb * np.exp(1j * 2 * np.pi * fb * td), wb)
-        if melhor is None or r_ > melhor[0]:
-            melhor = (r_, a_, K_, td)
-    saida.append(("K e^(-s td)/(s+a), polo livre",
-                  f"a={melhor[1]:+.2f} 1/s, td={1000*melhor[3]:.0f} ms, K={melhor[2]:.0f}",
-                  melhor[0]))
-    melhor = None
+        a_, K_, r_, _ = fit_first_order(fb, Hb * np.exp(1j * 2 * np.pi * fb * td), wb)
+        if best is None or r_ > best[0]:
+            best = (r_, a_, K_, td)
+    out.append(("K e^(-s td)/(s+a), free pole",
+                f"a={best[1]:+.2f} 1/s, td={1000*best[3]:.0f} ms, K={best[2]:.0f}",
+                best[0]))
+    best = None
     for Tm in np.arange(0.005, 0.201, 0.005):
-        K, r = ganho_otimo(1.0 / (s_ * (1 + s_ * Tm)))
-        if melhor is None or r > melhor[0]:
-            melhor = (r, Tm, K)
-    saida.append(("K/(s(1+s Tm)) integrador+motor",
-                  f"Tm={1000*melhor[1]:.0f} ms, K={melhor[2]:.0f}", melhor[0]))
-    melhor = None
+        K, r = best_gain(1.0 / (s_ * (1 + s_ * Tm)))
+        if best is None or r > best[0]:
+            best = (r, Tm, K)
+    out.append(("K/(s(1+s Tm)) integrator+motor",
+                f"Tm={1000*best[1]:.0f} ms, K={best[2]:.0f}", best[0]))
+    best = None
     for td in np.arange(0.0, 0.201, 0.005):
-        K, r = ganho_otimo(np.exp(-s_ * td) / s_)
-        if melhor is None or r > melhor[0]:
-            melhor = (r, td, K)
-    saida.append(("K e^(-s td)/s integrador puro",
-                  f"td={1000*melhor[1]:.0f} ms, K={melhor[2]:.0f}", melhor[0]))
-    melhor = None
+        K, r = best_gain(np.exp(-s_ * td) / s_)
+        if best is None or r > best[0]:
+            best = (r, td, K)
+    out.append(("K e^(-s td)/s pure integrator",
+                f"td={1000*best[1]:.0f} ms, K={best[2]:.0f}", best[0]))
+    best = None
     for Tm in np.arange(0.005, 0.151, 0.005):
         for td in np.arange(0.0, 0.101, 0.005):
-            K, r = ganho_otimo(np.exp(-s_ * td) / (s_ * (1 + s_ * Tm)))
-            if melhor is None or r > melhor[0]:
-                melhor = (r, Tm, td, K)
-    saida.append(("K e^(-s td)/(s(1+s Tm))",
-                  f"Tm={1000*melhor[1]:.0f}, td={1000*melhor[2]:.0f} ms, "
-                  f"K={melhor[3]:.0f}", melhor[0]))
-    return saida
+            K, r = best_gain(np.exp(-s_ * td) / (s_ * (1 + s_ * Tm)))
+            if best is None or r > best[0]:
+                best = (r, Tm, td, K)
+    out.append(("K e^(-s td)/(s(1+s Tm))",
+                f"Tm={1000*best[1]:.0f}, td={1000*best[2]:.0f} ms, K={best[3]:.0f}",
+                best[0]))
+    return out
 
 
 def main(argv):
@@ -115,9 +117,9 @@ def main(argv):
     ap.add_argument("--fc", type=float, default=20.0)
     ap.add_argument("--modes", nargs="*", default=["Manual"])
     ap.add_argument("--lag", type=float, default=0.0,
-                    help="atraso aplicado a entrada antes do calculo [s]")
-    ap.add_argument("--nperseg", type=float, default=8.0, help="segmento de Welch [s]")
-    ap.add_argument("--coer", type=float, default=0.6, help="limiar de coerencia")
+                    help="lag applied to the input before the computation [s]")
+    ap.add_argument("--nperseg", type=float, default=8.0, help="Welch segment [s]")
+    ap.add_argument("--coh", type=float, default=0.6, help="coherence threshold")
     ap.add_argument("--out", default="out")
     args = ap.parse_args(argv)
 
@@ -128,72 +130,72 @@ def main(argv):
                                         None, None, "torque")
     if args.lag:
         U = sr.first_order_lag(U, args.lag, args.hz)
-    nome = os.path.basename(args.ulg)[:8]
+    name = os.path.basename(args.ulg)[:8]
     nper = int(args.nperseg * args.hz)
 
     print("=" * 78)
-    print(f"Identificacao em frequencia — {nome}")
-    print(f"{len(t)} amostras @ {args.hz:g} Hz, modos={args.modes}, "
-          f"segmento de Welch {args.nperseg:g} s "
-          f"(resolucao {1/args.nperseg:.3f} Hz), limiar de coerencia {args.coer}")
+    print(f"Frequency-domain identification — {name}")
+    print(f"{len(t)} samples @ {args.hz:g} Hz, modes={args.modes}, "
+          f"Welch segment {args.nperseg:g} s "
+          f"(resolution {1/args.nperseg:.3f} Hz), coherence threshold {args.coh}")
 
-    eixos = [("p", 0), ("q", 1), ("r", 2)]
+    axes = [("p", 0), ("q", 1), ("r", 2)]
     fig, axs = plt.subplots(3, 3, figsize=(14, 9), layout="constrained")
     fig.patch.set_facecolor(BG)
-    resumo = []
-    for row, (nm, i) in enumerate(eixos):
-        x = U[:, i]                      # torque comandado
-        y = X[:, i]                      # taxa medida
+    summary = []
+    for row, (nm, i) in enumerate(axes):
+        x = U[:, i]                      # commanded torque
+        y = X[:, i]                      # measured rate
         f, Pxx = welch(x, fs=args.hz, nperseg=nper)
         _, Pyy = welch(y, fs=args.hz, nperseg=nper)
         _, Pxy = csd(x, y, fs=args.hz, nperseg=nper)
         _, coh = coherence(x, y, fs=args.hz, nperseg=nper)
         H = Pxy / np.where(Pxx == 0, np.nan, Pxx)
 
-        banda = (f > 0.05) & (f < args.fc) & (coh >= args.coer)
-        if banda.sum() >= 5:
-            fb, Hb, wb = f[banda], H[banda], coh[banda]
-            # varredura do atraso puro: H = K*exp(-jw*td)/(jw + a).
-            # Compensar o atraso antes do ajuste de 1a ordem torna o problema linear.
-            melhor = None
+        band = (f > 0.05) & (f < args.fc) & (coh >= args.coh)
+        if band.sum() >= 5:
+            fb, Hb, wb = f[band], H[band], coh[band]
+            # Pure-delay sweep: H = K*exp(-jw*td)/(jw + a). Compensating the delay
+            # before the first-order fit keeps the problem linear.
+            best = None
             for td in np.arange(0.0, 0.201, 0.005):
                 Hc = Hb * np.exp(1j * 2 * np.pi * fb * td)
-                a_, K_, r_, _ = ajusta_primeira_ordem(fb, Hc, wb)
-                if melhor is None or r_ > melhor[2]:
-                    melhor = (a_, K_, r_, td)
-            a, K, r2f, td = melhor
+                a_, K_, r_, _ = fit_first_order(fb, Hc, wb)
+                if best is None or r_ > best[2]:
+                    best = (a_, K_, r_, td)
+            a, K, r2f, td = best
             fmin, fmax = fb.min(), fb.max()
             ok = True
         else:
             a = K = r2f = td = np.nan
             fmin = fmax = np.nan
             ok = False
-        resumo.append((nm, a, K, r2f, fmin, fmax, int(banda.sum()),
-                       float(coh.max()), td))
+        summary.append((nm, a, K, r2f, fmin, fmax, int(band.sum()),
+                        float(coh.max()), td))
 
         ax = axs[row, 0]
         ax.loglog(f[1:], np.abs(H[1:]), color=C_A, lw=1.2)
         if ok:
-            ax.loglog(f[banda], np.abs(K / (1j * 2 * np.pi * f[banda] + a)),
+            ax.loglog(f[band], np.abs(K / (1j * 2 * np.pi * f[band] + a)),
                       color=C_B, lw=1.4, ls="--")
         ax.set_ylabel(f"|H| {nm}", fontsize=9)
-        ax.set_title(f"ganho {nm}: torque -> taxa", fontsize=9, loc="left")
+        ax.set_title(f"gain {nm}: torque -> rate", fontsize=9, loc="left")
 
         ax = axs[row, 1]
         ax.semilogx(f[1:], np.angle(H[1:], deg=True), color=C_A, lw=1.2)
         if ok:
-            ax.semilogx(f[banda],
-                        np.angle(K * np.exp(-1j * 2 * np.pi * f[banda] * td)
-                                 / (1j * 2 * np.pi * f[banda] + a), deg=True),
+            ax.semilogx(f[band],
+                        np.angle(K * np.exp(-1j * 2 * np.pi * f[band] * td)
+                                 / (1j * 2 * np.pi * f[band] + a), deg=True),
                         color=C_B, lw=1.4, ls="--")
-        ax.set_ylabel("fase [deg]", fontsize=9)
-        ax.set_title(f"fase {nm}", fontsize=9, loc="left")
+        ax.set_ylabel("phase [deg]", fontsize=9)
+        ax.set_title(f"phase {nm}", fontsize=9, loc="left")
 
         ax = axs[row, 2]
         ax.semilogx(f[1:], coh[1:], color=C_A, lw=1.2)
-        ax.axhline(args.coer, color=C_B, lw=1, ls="--")
-        ax.set_ylim(0, 1); ax.set_ylabel("coerencia", fontsize=9)
-        ax.set_title(f"coerencia {nm}", fontsize=9, loc="left")
+        ax.axhline(args.coh, color=C_B, lw=1, ls="--")
+        ax.set_ylim(0, 1); ax.set_ylabel("coherence", fontsize=9)
+        ax.set_title(f"coherence {nm}", fontsize=9, loc="left")
 
         for ax in axs[row]:
             ax.set_facecolor(BG); ax.grid(True, which="both", color=GRID, lw=0.5)
@@ -201,38 +203,38 @@ def main(argv):
             for s in ax.spines.values():
                 s.set_color(GRID)
             if row == 2:
-                ax.set_xlabel("frequencia [Hz]", fontsize=9)
+                ax.set_xlabel("frequency [Hz]", fontsize=9)
 
-    print(f"\n{'eixo':5} {'banda coerente':>18} {'pts':>5} {'coer max':>9} "
-          f"{'atraso ms':>10} {'a (amort.) 1/s':>15} {'K (ganho)':>11} {'R2':>7}")
-    for nm, a, K, r2f, fmin, fmax, n, cmax, td in resumo:
-        faixa = f"{fmin:.2f}-{fmax:.2f} Hz" if np.isfinite(fmin) else "nenhuma"
-        print(f"{nm:5} {faixa:>18} {n:5} {cmax:9.2f} {1000*td:10.0f} "
-              f"{a:15.3f} {K:11.1f} {r2f:7.3f}")
-    print("\n`a` positivo = amortecimento fisico; negativo = nao fisico "
-          "(residuo de malha fechada ou modelo inadequado).")
+    print(f"\n{'axis':5} {'coherent band':>18} {'pts':>5} {'max coh':>9} "
+          f"{'delay ms':>10} {'a (damping) 1/s':>16} {'K (gain)':>10} {'R2':>7}")
+    for nm, a, K, r2f, fmin, fmax, n, cmax, td in summary:
+        rng = f"{fmin:.2f}-{fmax:.2f} Hz" if np.isfinite(fmin) else "none"
+        print(f"{nm:5} {rng:>18} {n:5} {cmax:9.2f} {1000*td:10.0f} "
+              f"{a:16.3f} {K:10.1f} {r2f:7.3f}")
+    print("\nPositive `a` = physical damping; negative = non-physical "
+          "(closed-loop residue, or the wrong model structure).")
 
-    print("\n--- qual estrutura descreve a planta? (R2 ponderado pela coerencia)")
-    for nm, i in eixos[:2]:
+    print("\n--- which structure describes the plant? (R2 weighted by coherence)")
+    for nm, i in axes[:2]:
         x, y = U[:, i], X[:, i]
         f, Pxx = welch(x, fs=args.hz, nperseg=nper)
         _, Pxy = csd(x, y, fs=args.hz, nperseg=nper)
         _, coh = coherence(x, y, fs=args.hz, nperseg=nper)
         H = Pxy / np.where(Pxx == 0, np.nan, Pxx)
-        b = (f > 0.25) & (f < args.fc) & (coh >= args.coer)
+        b = (f > 0.25) & (f < args.fc) & (coh >= args.coh)
         if b.sum() < 5:
-            print(f"  {nm}: banda coerente insuficiente")
+            print(f"  {nm}: coherent band too small")
             continue
-        print(f"  eixo {nm}:")
-        for modelo, par, r in compara_estruturas(f[b], H[b], coh[b]):
-            print(f"    {modelo:34} {par:34} R2={r:6.3f}")
+        print(f"  axis {nm}:")
+        for model, par, r in compare_structures(f[b], H[b], coh[b]):
+            print(f"    {model:34} {par:34} R2={r:6.3f}")
 
-    fig.suptitle(f"Resposta em frequencia e coerencia — {nome}", fontsize=11,
+    fig.suptitle(f"Frequency response and coherence — {name}", fontsize=11,
                  color=INK, x=0.01, ha="left")
     os.makedirs(args.out, exist_ok=True)
-    png = os.path.join(args.out, f"freq_{nome}.png")
+    png = os.path.join(args.out, f"freq_{name}.png")
     fig.savefig(png, dpi=130)
-    print(f"figura: {png}")
+    print(f"figure: {png}")
     return 0
 
 

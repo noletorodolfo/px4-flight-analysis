@@ -73,12 +73,12 @@ those four alone says "crash"; all four at the same instant do.
 
 ### A controller gain change, separated from flying conditions
 
-![flight comparison](docs/img/comparison_high_gai_low_gain.png)
+![flight comparison](docs/img/comparison_high_gain_low_gain.png)
 
 Two flights of the same airframe on the same day, `MC_ROLLRATE_P` 0.11 → 0.05. Raw RMS
 error doubled — but the second flight was also flown twice as hard, and the error
-*normalised by command* did not move. What moved cleanly was the **tracking lag, 21.8 →
-75.4 ms**, which does not scale with aggressiveness. The loop got slower; the airframe
+*normalised by command* did not move. What moved cleanly was the **tracking lag, 21.2 →
+47.6 ms**, which does not scale with aggressiveness. The loop got slower; the airframe
 did not change.
 
 This is why the report separates **robust** metrics from **condition-sensitive** ones

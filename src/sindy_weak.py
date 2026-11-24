@@ -145,25 +145,23 @@ def main(argv):
     print(f"test windows: {len(A)} ({tr_j.sum()} train / {te_j.sum()} test)")
 
     print("\n--- free library: weak form vs strong form (derivative)")
+    def pick(Theta_, y_, tr_, te_):
+        """Same model-selection rule as src/sindy_rates.py: among models within
+        3% of the best test R2, keep the one with fewest terms. Using a different
+        rule here would make the weak/strong comparison meaningless."""
+        cand = []
+        for th in [0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.35]:
+            xi, _ = sr.stlsq(Theta_[tr_], y_[tr_], th)
+            sc = r2(y_[te_], Theta_[te_] @ xi)
+            cand.append((sc, xi, int(np.sum(np.abs(xi) > 0))))
+        best_r2 = max(c[0] for c in cand)
+        ok = [c for c in cand if c[0] >= best_r2 - 0.03 * abs(best_r2)]
+        return min(ok, key=lambda c: (c[2], -c[0]))
+
+    tr_s, te_s = sr.block_split(t, 10.0)
     for k, axis in enumerate(["p_dot", "q_dot", "r_dot"]):
-        # weak
-        best = None
-        for th in [0.002, 0.01, 0.05, 0.1, 0.2, 0.35]:
-            xi, _ = sr.stlsq(A[tr_j], B[tr_j, k], th)
-            sc = r2(B[te_j, k], A[te_j] @ xi)
-            n_t = int(np.sum(np.abs(xi) > 0))
-            if best is None or sc > best[0]:
-                best = (sc, th, xi, n_t)
-        sc_w, th_w, xi_w, nt_w = best
-        # strong form, same window selection
-        tr_s, te_s = sr.block_split(t, 10.0)
-        best_s = None
-        for th in [0.002, 0.01, 0.05, 0.1, 0.2, 0.35]:
-            xi, _ = sr.stlsq(Theta[tr_s], Xdot[tr_s, k], th)
-            sc = r2(Xdot[te_s, k], Theta[te_s] @ xi)
-            if best_s is None or sc > best_s[0]:
-                best_s = (sc, th, xi, int(np.sum(np.abs(xi) > 0)))
-        sc_s, _, xi_s, nt_s = best_s
+        sc_w, xi_w, nt_w = pick(A, B[:, k], tr_j, te_j)
+        sc_s, xi_s, nt_s = pick(Theta, Xdot[:, k], tr_s, te_s)
         # the weak model evaluated against the derivative, for comparability
         sc_cross = r2(Xdot[te_s, k], Theta[te_s] @ xi_w)
         print(f"  {axis}: weak R2 {sc_w:6.3f} ({nt_w} terms) | "

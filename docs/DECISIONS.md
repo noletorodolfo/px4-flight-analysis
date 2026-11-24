@@ -135,8 +135,8 @@ of the difference excludes zero.
 - **Result, and the methodological lesson**: with the gain halved, raw RMS errors
   doubled (roll rate 7.2 → 14.6 °/s) — but flight B was also flown twice as hard. The
   error **normalised by command did not move** (0.66 → 0.61, inside the CI). What moved
-  cleanly was the **tracking lag: 21.8 → 75.4 ms** (+53.6 ms, CI [+28, +54]), which does
-  not scale with aggressiveness. The loop got slower, exactly as theory predicts, and
+  cleanly was the **tracking lag: 21.2 → 47.6 ms** (+26.5 ms, CI [+14.7, +52.9]), which
+  does not scale with aggressiveness. The loop got slower, exactly as theory predicts, and
   raw RMS would have given the right answer for the wrong reason.
 - Hence metrics are split into **robust** (normalised error, lag, plant effectiveness)
   and **condition-sensitive** (raw RMS, saturation), with a warning when aggressiveness
@@ -144,6 +144,12 @@ of the difference excludes zero.
 - Guards added after watching metrics lie:
   - normalised error is only computed when `std(command) ≥ 3 °/s`;
   - lag is only reported when peak correlation is ≥ 0.5;
+  - **lag is estimated inside each contiguous 10 s segment and the median taken.** The
+    first version computed it over the whole window and then bootstrapped by resampling
+    shuffled blocks, which splices the signal: the point estimate (75.4 ms) landed above
+    the upper bound of its own interval, because estimate and interval were different
+    statistics. Corrected, the roll lag reads 21.2 → 47.6 ms instead of 21.8 → 75.4 ms,
+    and the conclusion (the loop got significantly slower) is unchanged;
   - a comparability warning fires when mean motor command differs by more than 5 %
     between flights — that is weight, battery or propulsion, and no performance
     difference can then be attributed to configuration alone.
@@ -163,8 +169,9 @@ commanded torque. The idea is sound; the data is not there.
 
 **2. Weak (integral) form SINDy (`src/sindy_weak.py`) — confirms the negative result and
 cleans it up.** Integration by parts against a `(1−τ²)^6` test function, no numerical
-derivative anywhere. Test R²: 0.92 / 0.86 / 0.31 against 0.94 / 0.92 / 0.43 for the
-strong form — equivalent, not better. `Iz/Ix` still pins to 0.30 and ranges 0.30–4.00
+derivative anywhere. Test R², under the same model-selection rule as the strong form
+(fewest terms within 3 % of the best): 0.902 / 0.848 / 0.309 against 0.924 / 0.896 /
+0.428 — equivalent, slightly worse. `Iz/Ix` still pins to 0.30 and ranges 0.30–4.00
 across segments. The decisive test moves from **harmful** (strong form, `q_dot` −0.021)
 to **indifferent** (+0.002): without derivative noise the gyroscopic term is not
 damaging, it simply carries no information. With `kz` fixed at 2, the best `Iy/Ix`

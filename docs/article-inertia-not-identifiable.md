@@ -117,8 +117,9 @@ integrate by parts, so
 The left side, which needed the derivative, becomes an integral of the signal itself.
 No numerical differentiation enters the regression anywhere.
 
-Result: test R² 0.92 / 0.86 / 0.31, against 0.94 / 0.92 / 0.43 for the strong form.
-Equivalent — not better. `Iz/Ix` still pins to the lower bound and still ranges
+Result, with the same model-selection rule as before (fewest terms within 3 % of the
+best test R²): **0.902 / 0.848 / 0.309**, against **0.924 / 0.896 / 0.428** for the
+strong form. Equivalent — slightly worse, in fact. `Iz/Ix` still pins to the lower bound and still ranges
 0.30–4.00 across segments.
 
 One thing did change, and it sharpens the conclusion. The decisive test moves from
@@ -254,10 +255,12 @@ that way by accident.
 
 Not inertia. But the same analysis hands over three things that are solid:
 
-- **Control effectiveness.** Roughly 138–152 rad/s² per unit of normalised roll torque,
-  agreeing between the time and frequency domains to about 10 % once the model structure
-  is right. It roughly doubles between unloaded and full thrust, which has a direct
-  consequence: a rate gain tuned in hover is under-damped in hard manoeuvring.
+- **Control effectiveness.** Roughly 140–165 rad/s² per unit of normalised roll torque:
+  138–144 from the frequency domain once the model structure is right, 152 from ordinary
+  least squares in the time domain, 164 from the instrumental-variable estimate. Three
+  methods inside a ±10 % band. It roughly doubles between unloaded and full thrust, which
+  has a direct consequence: a rate gain tuned in hover is under-damped in hard
+  manoeuvring.
 - **Actuation delay**, 30 to 60 ms depending on method — the lag a rate controller has to
   compensate.
 - **The coherent bandwidth**, 0.25 to 8 Hz here, which is the honest statement of where

@@ -2,8 +2,9 @@
 
 A quadrotor tracks attitude to 20.7° RMS. That sounds broken.
 
-The same quadrotor, the same flight, four minutes later, tracks to 2.3°. Nothing was
-repaired in between. Nobody touched a gain. The vehicle did not land.
+The same quadrotor, in the same flight, also tracks to 2.3°. Nothing was repaired in
+between: it stayed armed for the whole 373 s, and of the 25 parameters that changed
+during the log, none is a control or estimation parameter.
 
 The difference is that the first number was measured in Manual mode and the second in
 Position mode, and in Manual the attitude setpoint is whatever the pilot's stick says
@@ -102,7 +103,7 @@ cannot be faked by a missing field.
 
 ## 4. Comparing raw RMS between two flights
 
-![flight comparison with confidence intervals](img/comparison_high_gai_low_gain.png)
+![flight comparison with confidence intervals](img/comparison_high_gain_low_gain.png)
 
 This is the one that would have cost me a wrong engineering conclusion.
 
@@ -132,12 +133,20 @@ So did halving the gain do nothing? No. One metric moved cleanly:
 
 | metric | high gain | low gain | difference (90% CI) |
 |---|---|---|---|
-| tracking lag, roll | 21.8 ms | 75.4 ms | **+53.6 ms [+28, +54]** |
+| tracking lag, roll | 21.2 ms | 47.6 ms | **+26.5 ms [+14.7, +52.9]** |
 
 Tracking lag — the delay that maximises cross-correlation between commanded and
 measured rate — does not scale with how hard you fly. It is a property of the loop. The
-loop got 54 ms slower, which is exactly what control theory predicts from halving a
-proportional gain.
+loop got about 27 ms slower, which is exactly what control theory predicts from halving
+a proportional gain.
+
+One detail that is itself a sixth trap: cross-correlation only means anything on a
+continuous stretch of time. My first version computed the lag over the whole window and
+then bootstrapped it by resampling shuffled blocks, which splices the signal and
+measures something else. The point estimate came out sitting on the edge of its own
+confidence interval — the symptom that the estimate and the interval are not the same
+statistic. The fix is to estimate the lag inside each contiguous segment and take the
+median, so both measure the same thing.
 
 The raw RMS would have given the right verdict for the wrong reason. Reverse the
 situation — make the *high* gain flight the aggressive one — and it gives the wrong

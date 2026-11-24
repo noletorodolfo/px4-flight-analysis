@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 
 import matplotlib
@@ -190,6 +191,36 @@ def load_flight(path):
     return u, df, mot, vib, freq
 
 
+def _contiguous_runs(idx, min_len):
+    """Split an index array into runs of consecutive samples."""
+    if len(idx) == 0:
+        return []
+    cuts = np.where(np.diff(idx) != 1)[0] + 1
+    return [r for r in np.split(np.asarray(idx), cuts) if len(r) >= min_len]
+
+
+def _lag_over_runs(df, idx, axis, hz, seg_s=BLOCK_S):
+    """Median tracking lag over contiguous segments.
+
+    Cross-correlation only means something on a continuous stretch of time. The
+    block bootstrap concatenates shuffled blocks, so computing the lag over the
+    concatenation compares a different statistic to the point estimate — which
+    is how a point estimate ended up sitting on the edge of its own interval.
+    Here the lag is estimated inside each contiguous segment and the median is
+    taken, so the point estimate and the bootstrap measure the same thing.
+    """
+    seg = int(seg_s * hz)
+    vals = []
+    for run in _contiguous_runs(idx, seg):
+        for s0 in range(0, len(run) - seg + 1, seg):
+            sub = run[s0:s0 + seg]
+            d = df.iloc[sub]
+            v = lag_ms(d[f"sp_{axis}"].to_numpy(), d[f"act_{axis}"].to_numpy(), hz)
+            if np.isfinite(v):
+                vals.append(v)
+    return float(np.median(vals)) if vals else np.nan
+
+
 def block_metrics(df, mot, vib, idx, freq=None):
     """Metrics over a subset of samples (one block or a set of blocks)."""
     d = df.iloc[idx]
@@ -204,8 +235,7 @@ def block_metrics(df, mot, vib, idx, freq=None):
         out[f"err_{axis}"] = float(np.sqrt(np.mean(e ** 2)))
         # dividing by a near-zero command inflates the metric: require 3 deg/s
         out[f"err_{axis}_norm"] = out[f"err_{axis}"] / s if s >= 3.0 else np.nan
-        out[f"lag_{axis}"] = lag_ms(d[f"sp_{axis}"].to_numpy(),
-                                    d[f"act_{axis}"].to_numpy(), HZ)
+        out[f"lag_{axis}"] = _lag_over_runs(df, idx, axis, HZ)
     out["exc_p"] = float(np.std(d["sp_p"].to_numpy()) * R2D)
     out["vib_hf"] = vib
     for k in ("K_p", "K_q", "band_p"):
@@ -459,8 +489,7 @@ def main(argv):
                  fontsize=11, color=INK, x=0.01, ha="left")
 
     os.makedirs(args.out, exist_ok=True)
-    tag = "_".join(n.replace("[", "").replace("]", "").replace(":", "")[:8]
-                   for n in names)
+    tag = "_".join(re.sub(r"[^0-9A-Za-z._+-]+", "", n) for n in names)[:60]
     png = os.path.join(args.out, f"comparison_{tag}.png")
     md = os.path.join(args.out, f"comparison_{tag}.md")
     fig.savefig(png, dpi=130)

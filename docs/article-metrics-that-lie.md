@@ -242,10 +242,10 @@ Three habits that catch most of it:
 
 ---
 
-*The toolkit I used — per-flight reports with fleet-calibrated thresholds,
-flight-to-flight comparison with confidence intervals, and attitude-rate system
-identification in both time and frequency domain — is on GitHub. If you fly PX4 or
-ArduPilot and want a second pair of eyes on a log, I am happy to run it and send you
-what it finds.*
+*I built these checks into a toolkit: per-flight reports with fleet-calibrated
+thresholds, flight-to-flight comparison with confidence intervals, and attitude-rate
+system identification in both time and frequency domain. If you fly PX4 or ArduPilot
+and want a second pair of eyes on a log, send me one and I will run it and tell you
+what it finds — including when the answer is "this log cannot tell you that".*
 
 *— Rodolfo Noleto, aeronautical engineer. [nolforge.com](https://nolforge.com)*
